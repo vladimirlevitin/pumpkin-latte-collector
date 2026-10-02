@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.6.2-passive-sync-batch';
+const VERSION='pla-fb-archive-v2.6.3-passive-sync-all';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -473,11 +473,13 @@ function queueSyncPost(postKey,force=false){
 
 async function syncAllLocal(){
   ensureSyncWindow();
+  if(syncBusy){render('Синхронизация уже идёт');return;}
   const posts=await getAll('posts');
-  for(const p of posts){
-    if(/^fb:pumpkinlatte:post:[0-9]+$/.test(p.key||'')&&p.sync_status!=='synced')queueSyncPost(p.key,true);
-  }
-  render('Поставил локальную базу в очередь Supabase');
+  const keys=[...new Set(posts.filter(p=>/^fb:pumpkinlatte:post:[0-9]+$/.test(p.key||'')).map(p=>p.key))];
+  syncQueue=[...keys];
+  syncQueuedKeys=new Set(keys);
+  render(`Синхронизация всей локальной базы: ${keys.length} постов`);
+  void drainSyncQueue();
 }
 
 async function persistAuthor(author){
