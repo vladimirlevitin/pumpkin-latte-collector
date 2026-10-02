@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.6.4-sync-fallbacks';
+const VERSION='pla-fb-archive-v2.6.5-author-dates';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -47,19 +47,85 @@ async function sha256(value){
   return [...new Uint8Array(hash)].map(b=>b.toString(16).padStart(2,'0')).join('');
 }
 
-function parseDate(raw){
-  const monthMap={январь:0,января:0,янв:0,февраль:1,февраля:1,фев:1,март:2,марта:2,мар:2,апрель:3,апреля:3,апр:3,май:4,мая:4,июнь:5,июня:5,июн:5,июль:6,июля:6,июл:6,август:7,августа:7,авг:7,сентябрь:8,сентября:8,сен:8,сент:8,октябрь:9,октября:9,окт:9,ноябрь:10,ноября:10,ноя:10,декабрь:11,декабря:11,дек:11};
-  let s=norm(raw).toLowerCase().replace(/,/g,' ').replace(/\s+г\.?/g,' ');
-  let m=s.match(/(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})/);
-  if(m)return new Date(+m[3],+m[2]-1,+m[1]);
-  m=s.match(/(\d{1,2})\s+([а-яё]+)\s+(\d{4})/i);
-  if(m&&monthMap[m[2]]!==undefined)return new Date(+m[3],monthMap[m[2]],+m[1]);
-  m=s.match(/(\d{1,2})\s+([а-яё]+)(?:\s+в\s+\d{1,2}:\d{2})?/i);
-  if(m&&monthMap[m[2]]!==undefined){const n=new Date();let d=new Date(n.getFullYear(),monthMap[m[2]],+m[1]);if(d>new Date(n.getTime()+2*864e5))d=new Date(n.getFullYear()-1,monthMap[m[2]],+m[1]);return d;}
-  if(/сегодня|today|היום/.test(s))return new Date();
-  if(/вчера|yesterday|אתמול/.test(s))return new Date(Date.now()-864e5);
-  m=s.match(/^(\d+)\s*(мин|минута|минуты|минут|ч|час|часа|часов|дн|день|дня|дней|нед|неделя|недели|недель|min|m|hr|h|day|days|week|weeks)\.?$/i);
-  if(m){const u=m[2].toLowerCase(),ms=/мин|min|^m$/.test(u)?6e4:/^ч$|час|hr|^h$/.test(u)?36e5:/нед|week/.test(u)?6048e5:864e5;return new Date(Date.now()-+m[1]*ms);}
+function dedupeDateRaw(raw){
+  const s=norm(raw).replace(/\u202f/g,' ');
+  const parts=s.split(/\s+/).filter(Boolean);
+  if(parts.length>=2&&parts.length%2===0){
+    const half=parts.length/2;
+    const a=parts.slice(0,half).join(' ');
+    const b=parts.slice(half).join(' ');
+    if(a===b)return a;
+  }
+  return s;
+}
+
+function atLocalNoon(year,month,day){
+  const d=new Date(year,month,day,12,0,0,0);
+  return Number.isNaN(d.getTime())?null:d;
+}
+
+function parseDate(raw,now=new Date()){
+  let s=dedupeDateRaw(raw).toLowerCase().replace(/,/g,' ').replace(/\s+/g,' ').trim();
+  if(!s)return null;
+
+  if(/^\d{10,13}$/.test(s)){
+    const n=Number(s),d=new Date(s.length===10?n*1000:n);
+    return Number.isNaN(d.getTime())?null:d;
+  }
+
+  const monthMap={
+    'январь':0,'января':0,'янв':0,
+    'февраль':1,'февраля':1,'фев':1,
+    'март':2,'марта':2,'мар':2,
+    'апрель':3,'апреля':3,'апр':3,
+    'май':4,'мая':4,
+    'июнь':5,'июня':5,'июн':5,
+    'июль':6,'июля':6,'июл':6,
+    'август':7,'августа':7,'авг':7,
+    'сентябрь':8,'сентября':8,'сен':8,'сент':8,
+    'октябрь':9,'октября':9,'окт':9,
+    'ноябрь':10,'ноября':10,'ноя':10,
+    'декабрь':11,'декабря':11,'дек':11
+  };
+
+  let m=s.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})(?:\s+(\d{1,2}):(\d{2}))?$/);
+  if(m){
+    const d=m[4]!==undefined
+      ? new Date(Number(m[3]),Number(m[2])-1,Number(m[1]),Number(m[4]),Number(m[5]),0,0)
+      : atLocalNoon(Number(m[3]),Number(m[2])-1,Number(m[1]));
+    return d&&!Number.isNaN(d.getTime())?d:null;
+  }
+
+  if(/^(сегодня|today|היום)$/.test(s))return atLocalNoon(now.getFullYear(),now.getMonth(),now.getDate());
+  if(/^(вчера|yesterday|אתמול)$/.test(s))return atLocalNoon(now.getFullYear(),now.getMonth(),now.getDate()-1);
+
+  m=s.match(/^(\d+)\s*(мин|минута|минуты|минут|m|min|ч|час|часа|часов|h|hr|дн|день|дня|дней|day|days|нед|неделя|недели|недель|week|weeks)\.?$/i);
+  if(m){
+    const n=Number(m[1]),unit=m[2].toLowerCase();
+    if(/^(мин|минута|минуты|минут|m|min)$/.test(unit))return new Date(now.getTime()-n*60000);
+    if(/^(ч|час|часа|часов|h|hr)$/.test(unit))return new Date(now.getTime()-n*3600000);
+    const days=/^(нед|неделя|недели|недель|week|weeks)$/.test(unit)?n*7:n;
+    return atLocalNoon(now.getFullYear(),now.getMonth(),now.getDate()-days);
+  }
+
+  s=s.replace(/\s+г\.?$/,'').trim();
+  m=s.match(/^(\d{1,2})\s+([а-яё]+)(?:\s+(\d{4}))?(?:\s+в\s+(\d{1,2}):(\d{2}))?$/i);
+  if(m&&monthMap[m[2]]!==undefined){
+    const day=Number(m[1]),month=monthMap[m[2]];
+    let year=m[3]?Number(m[3]):now.getFullYear();
+    const hasTime=m[4]!==undefined;
+    let d=hasTime
+      ? new Date(year,month,day,Number(m[4]),Number(m[5]),0,0)
+      : atLocalNoon(year,month,day);
+    if(!m[3]&&d&&d.getTime()>now.getTime()+7*86400000){
+      year--;
+      d=hasTime
+        ? new Date(year,month,day,Number(m[4]),Number(m[5]),0,0)
+        : atLocalNoon(year,month,day);
+    }
+    return d&&!Number.isNaN(d.getTime())?d:null;
+  }
+
   return null;
 }
 
@@ -109,41 +175,105 @@ function permalinkMeta(article){
   return candidates[0]||null;
 }
 
+function isPlausibleAuthorName(name){
+  const s=norm(name);
+  if(!s||s.length<2||s.length>80)return false;
+  if(!/[A-Za-zА-Яа-яЁё\u0590-\u05FF]/.test(s))return false;
+  if(/^\d{1,2}:\d{2}\s*\/\s*\d{1,2}:\d{2}$/.test(s))return false;
+  if(/^(?:https?:\/\/|www\.)/i.test(s))return false;
+  if(/\b[a-z0-9-]+\.(?:com|net|org|co|il|gov|edu|io|me)\b/i.test(s))return false;
+  if(/^[\d\s:/.\-]+$/.test(s))return false;
+  return true;
+}
+
 function stableProfileFromHref(href){
   try{
     const u=new URL(href,location.origin);
-    const id=u.searchParams.get('id');
-    if(id)return {facebook_author_id:id,profile_url:u.origin+u.pathname+'?id='+id};
-    const p=u.pathname.split('/').filter(Boolean);
-    if(!p.length)return {facebook_author_id:null,profile_url:u.href};
-    if(p[0]==='groups'||p[0]==='posts'||p[0]==='permalink'||p[0]==='photo')return {facebook_author_id:null,profile_url:u.href};
-    return {facebook_author_id:p[0],profile_url:u.origin+'/'+p[0]};
-  }catch{return {facebook_author_id:null,profile_url:href||null};}
+    const host=u.hostname.toLowerCase();
+    if(!['facebook.com','www.facebook.com','m.facebook.com'].includes(host))return {facebook_author_id:null,profile_url:null};
+
+    const parts=u.pathname.split('/').filter(Boolean);
+    if(!parts.length)return {facebook_author_id:null,profile_url:null};
+
+    if(
+      parts.length>=4 &&
+      parts[0].toLowerCase()==='groups' &&
+      parts[2].toLowerCase()==='user' &&
+      /^\d+$/.test(parts[3])
+    ){
+      const id=parts[3];
+      return {facebook_author_id:id,profile_url:`https://www.facebook.com/profile.php?id=${id}`};
+    }
+
+    const first=parts[0].toLowerCase();
+    const blocked=new Set([
+      'l.php','groups','posts','permalink','photo','photos','watch','reel','reels',
+      'story.php','stories','events','marketplace','gaming','help','login','share',
+      'sharer.php','plugins','pages','places','page','people','public','hashtag',
+      'search','notifications','messages','friends','settings','privacy','bookmarks'
+    ]);
+    if(blocked.has(first))return {facebook_author_id:null,profile_url:null};
+
+    if(first==='profile.php'){
+      const id=u.searchParams.get('id');
+      return /^\d+$/.test(id||'')
+        ?{facebook_author_id:id,profile_url:`https://www.facebook.com/profile.php?id=${id}`}
+        :{facebook_author_id:null,profile_url:null};
+    }
+
+    if(parts.length!==1)return {facebook_author_id:null,profile_url:null};
+    const id=parts[0];
+    if(!/^[A-Za-z0-9._-]{2,100}$/.test(id))return {facebook_author_id:null,profile_url:null};
+    return {facebook_author_id:id,profile_url:`https://www.facebook.com/${id}`};
+  }catch{return {facebook_author_id:null,profile_url:null};}
+}
+
+function isPlausibleAuthorRecord(author){
+  if(!author||!isPlausibleAuthorName(author.display_name))return false;
+  const p=stableProfileFromHref(author.profile_url||'');
+  if(!p.profile_url)return false;
+  if(String(author.facebook_author_id||'').toLowerCase()==='l.php')return false;
+  return true;
 }
 
 function extractAuthor(root){
   const rr=root.getBoundingClientRect?.()||{top:0,height:1000};
+  const directMessage=root.querySelector?.('[data-ad-preview="message"], [data-ad-comet-preview="message"]');
+  const mr=directMessage?.getBoundingClientRect?.();
+  const messageTop=mr&&Number.isFinite(mr.top)?mr.top:Infinity;
+  const headerBottom=Math.min(rr.top+Math.min(180,Math.max(100,rr.height*.32)),messageTop+4);
   const candidates=[];
+
   for(const a of root.querySelectorAll('a[href]')){
     const nearest=a.closest?.('[role="article"]');
     if(nearest&&nearest!==root)continue;
+    if(a.closest?.('button,[role="button"],[role="slider"]'))continue;
+
     const name=norm(text(a));
-    const href=a.href||a.getAttribute('href')||'';
-    if(!name||name.length<2||name.length>120||!href)continue;
+    if(!isPlausibleAuthorName(name))continue;
     if(RX.relativeTime.test(name)||RX.interaction.test(name)||RX.metaOnly.test(name))continue;
-    if(/\/groups\/|\/posts\/|\/permalink\/|story_fbid=|\/photo\//.test(href))continue;
-    const r=a.getBoundingClientRect?.()||{top:0};
-    if(r.top>rr.top+Math.min(220,rr.height*.35))continue;
+
+    const href=a.href||a.getAttribute('href')||'';
     const p=stableProfileFromHref(href);
+    if(!p.profile_url)continue;
+
+    const r=a.getBoundingClientRect?.()||{top:Infinity,bottom:Infinity};
+    if(Number.isFinite(r.top)&&r.top>headerBottom)continue;
+
+    const semantic=!!a.closest?.('h2,h3,strong,[data-ad-rendering-role="profile_name"]');
     let score=0;
-    if(p.facebook_author_id)score+=20;
-    if(/^https?:\/\/(www\.)?facebook\.com\//.test(href))score+=10;
-    score+=Math.max(0,200-Math.max(0,r.top-rr.top))/20;
+    if(p.facebook_author_id)score+=35;
+    if(Number.isFinite(r.top)&&r.top<=rr.top+90)score+=30;
+    if(Number.isFinite(r.bottom)&&r.bottom<=messageTop+4)score+=20;
+    if(semantic)score+=25;
+    if(name.includes(' '))score+=5;
     candidates.push({score,display_name:name,facebook_author_id:p.facebook_author_id,profile_url:p.profile_url});
   }
+
   candidates.sort((a,b)=>b.score-a.score);
   const a=candidates[0];
-  return a?{display_name:a.display_name,facebook_author_id:a.facebook_author_id,profile_url:a.profile_url}:{display_name:null,facebook_author_id:null,profile_url:null};
+  if(!a||a.score<65)return {display_name:null,facebook_author_id:null,profile_url:null};
+  return {display_name:a.display_name,facebook_author_id:a.facebook_author_id,profile_url:a.profile_url};
 }
 
 function cleanLines(s){
@@ -486,7 +616,7 @@ async function syncAllLocal(){
 }
 
 async function persistAuthor(author){
-  if(!author?.display_name&&!author?.facebook_author_id)return null;
+  if(!isPlausibleAuthorRecord(author))return null;
   const basis=author.facebook_author_id||`${GROUP_PATH}|${author.display_name}|${author.profile_url||''}`;
   const key=`author:${await sha256(basis)}`;
   const prev=await getOne('authors',key);
@@ -621,6 +751,15 @@ async function selfTest(){
     ok('post date',!!pm?.posted_at&&pm.posted_at.startsWith('2026-10-02'),pm?.posted_at||'');
     ok('post text',extractOwnText(p,'post').includes('Как оформить арнону?'));
     const au=extractAuthor(p);ok('author',au.display_name==='Alice Example',JSON.stringify(au));
+    const groupAuthorDoc=dp.parseFromString('<div role="article"><a href="https://www.facebook.com/groups/520446732921183/user/100004442703181/?x=1">Андрей Агрест</a><div data-ad-preview="message">Тест</div></div>','text/html').body.firstElementChild;
+    for(const e of groupAuthorDoc.querySelectorAll('*'))e.getBoundingClientRect=()=>({top:0,bottom:20,width:200,height:20});
+    groupAuthorDoc.getBoundingClientRect=()=>({top:0,bottom:300,width:640,height:300});
+    const gau=extractAuthor(groupAuthorDoc);ok('group user author',gau.facebook_author_id==='100004442703181'&&gau.display_name==='Андрей Агрест',JSON.stringify(gau));
+    const junkAuthorDoc=dp.parseFromString('<div role="article"><a href="https://www.facebook.com/pages">Город Germasogeia, Республика Кипр</a><a href="https://l.facebook.com/l.php">moag.gov.il</a><a href="https://www.facebook.com/100087286527616">0:00 / 0:19</a><div data-ad-preview="message">Тест</div></div>','text/html').body.firstElementChild;
+    for(const e of junkAuthorDoc.querySelectorAll('*'))e.getBoundingClientRect=()=>({top:0,bottom:20,width:200,height:20});
+    junkAuthorDoc.getBoundingClientRect=()=>({top:0,bottom:300,width:640,height:300});
+    const jau=extractAuthor(junkAuthorDoc);ok('junk author rejected',!jau.facebook_author_id&&!jau.display_name,JSON.stringify(jau));
+    const pd=parseDate('24 сентябрь в 09:52',new Date(2026,9,2,15,0,0));ok('date with time',pd instanceof Date&&pd.getFullYear()===2026&&pd.getMonth()===8&&pd.getDate()===24&&pd.getHours()===9&&pd.getMinutes()===52,pd?.toISOString?.()||'');
     const pr=await buildPostRecord(p);const cs=await buildComments(p,pr);
     ok('comment id',cs.some(x=>x.facebook_comment_id==='555'));
     ok('reply id',cs.some(x=>x.facebook_comment_id==='556'));
