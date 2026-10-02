@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.4.0';
+const VERSION='pla-fb-archive-v2.5.0-safe';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -307,6 +307,38 @@ function getCollectorId(){
   return id;
 }
 
+function monitorHtml(){
+  const endpoint="https://ltznpjfnkpydautbsrej.supabase.co/rest/v1/collector_heartbeats";
+  const key="sb_publishable_tHMD6sI6e5BS9WOqFAeG1A_jFs6ta6d";
+  return `<!doctype html><meta charset="utf-8"><title>Pumpkin Monitor</title>
+  <body style="font:16px Arial;padding:14px;line-height:1.5"><b style="font-size:20px">Pumpkin Collector Monitor</b>
+  <div id="s" style="margin-top:12px">Жду данные…</div>
+  <script>
+  const endpoint=${JSON.stringify(endpoint)}, key=${JSON.stringify(key)};
+  const s=document.getElementById('s');
+  addEventListener('message',async e=>{
+    const m=e.data;
+    if(!m||m.type!=='pla-heartbeat')return;
+    const p=m.payload;
+    s.innerHTML='Статус: <b>'+p.status+'</b><br>Посты: <b>'+p.posts+'</b><br>Комментарии: <b>'+p.comments+'</b><br>Медиа: <b>'+p.media+'</b><br>Авторы: <b>'+p.authors+'</b><br>Ошибки: <b>'+p.errors+'</b><br>Последнее сохранение: <b>'+(p.last_saved_at||'—')+'</b><br><small>Отправляю состояние в Supabase…</small>';
+    try{
+      const r=await fetch(endpoint,{method:'POST',headers:{apikey:key,'Content-Type':'application/json',Prefer:'return=minimal'},body:JSON.stringify(p)});
+      s.innerHTML += '<br><b>'+(r.ok?'Supabase: OK':'Supabase: HTTP '+r.status)+'</b>';
+    }catch(err){
+      s.innerHTML += '<br><b>Supabase: ошибка сети</b>';
+    }
+  });
+  </script>`;
+}
+
+function ensureMonitor(){
+  try{
+    if(monitorWin&&!monitorWin.closed)return monitorWin;
+    monitorWin=window.open('data:text/html;charset=utf-8,'+encodeURIComponent(monitorHtml()),'PLA_MONITOR','width=380,height=430');
+    return monitorWin;
+  }catch{return null;}
+}
+
 async function sendHeartbeat(statusOverride){
   try{
     await refreshDbCounts();
@@ -323,17 +355,8 @@ async function sendHeartbeat(statusOverride){
       last_saved_at:lastSavedAt,
       client_at:nowIso()
     };
-    await fetch(HEARTBEAT_URL,{
-      method:'POST',
-      mode:'cors',
-      credentials:'omit',
-      headers:{
-        apikey:HEARTBEAT_KEY,
-        'Content-Type':'application/json',
-        Prefer:'return=minimal'
-      },
-      body:JSON.stringify(payload)
-    });
+    const w=ensureMonitor();
+    if(w&&!w.closed)w.postMessage({type:'pla-heartbeat',payload},'*');
   }catch{}
 }
 
@@ -368,7 +391,7 @@ async function persistBundle(post,comments,media){
 async function addError(data){try{await reqPromise((await txStore('errors','readwrite')).add({created_at:nowIso(),...data}))}catch{} }
 
 const stats={posts_seen:0,posts_new:0,posts_updated:0,comments_seen:0,comments_new:0,comments_updated:0,media_seen:0,media_new:0,errors:0,comments_incomplete:0};
-let running=false,timer=null,targetNew=100,seenSession=new Set(),emptyScans=0,watchdog=null,heartbeatTimer=null;
+let running=false,timer=null,targetNew=100,seenSession=new Set(),emptyScans=0,watchdog=null,heartbeatTimer=null,monitorWin=null;
 
 async function saveCrawlState(extra={}){
   const state={key:STATE_KEY,collector_version:VERSION,schema_version:SCHEMA_VERSION,group:GROUP_PATH,page_url:location.href,updated_at:nowIso(),stats:{...stats},...extra};
@@ -376,15 +399,13 @@ async function saveCrawlState(extra={}){
 }
 
 async function processArticle(article){
-  await expandPostText(article);
-  await tryAllComments(article);
-  const expansion=await expandComments(article);
+  // SAFE MODE: never click Facebook controls. Read only what is already loaded.
   const post=await buildPostRecord(article);
   if(seenSession.has(post.key))return null;
   seenSession.add(post.key);stats.posts_seen++;
   const comments=await buildComments(article,post);
   stats.comments_seen+=comments.length;
-  post.comments_complete=expansion.complete;
+  post.comments_complete=remainingExpandControls(article).length===0;
   if(!post.comments_complete)stats.comments_incomplete++;
   let media=mediaFromRoot(article,'post',post.key).map(m=>({...m,owner_key:post.key}));
   for(const c of comments){for(const m of mediaFromRoot(c._article,'comment',c.key))media.push({...m,owner_key:c.key});}
@@ -396,6 +417,7 @@ async function processArticle(article){
   lastSavedAt=nowIso();
   await saveCrawlState({checkpoint:{post_key:post.key,facebook_post_id:post.facebook_post_id,posted_at:post.posted_at,canonical_url:post.canonical_url,saved_at:lastSavedAt}});
   await refreshDbCounts();
+  sendHeartbeat();
   return {post,result};
 }
 
@@ -416,18 +438,20 @@ async function tick(){
   if(stats.posts_new>=targetNew){stop(`✓ Набрано ${targetNew} новых постов`);return;}
   if(!found){
     emptyScans++;
-    if(emptyScans>=3){stop('Пауза: Facebook не загрузил следующие посты. Данные сохранены.');return;}
-    timer=setTimeout(tick,1600);
+    if(emptyScans>=2){stop('Пауза: новые посты не загрузились. Данные сохранены.');return;}
+    timer=setTimeout(tick,3000);
     return;
   }
   emptyScans=0;
-  scrollBy(0,Math.max(innerHeight*.55,450));
-  timer=setTimeout(tick,1200);
+  // SAFE MODE: small, slow scroll; no clicks and no menu interaction.
+  scrollBy(0,Math.min(350,Math.max(220,innerHeight*.28)));
+  timer=setTimeout(tick,2800);
 }
 
 function start(){
   if(running)return;
   targetNew=Math.max(1,Math.min(1000,Number(countInput.value)||100));
+  ensureMonitor();
   emptyScans=0;
   running=true;
   render('Собираю…');
@@ -485,7 +509,7 @@ function render(msg=''){
 }
 
 const panel=document.createElement('div');panel.id=UI_ID;panel.style='position:fixed;top:12px;right:12px;width:400px;max-height:92vh;overflow:auto;z-index:2147483647;background:#fff;color:#111;border:2px solid #1877f2;border-radius:12px;padding:14px;font:16px/1.4 Arial,sans-serif;box-shadow:0 4px 20px #0005';
-panel.innerHTML=`<b style="font-size:18px">Pumpkin Latte Archive</b><span id="pla-x" style="float:right;cursor:pointer;font-size:22px">✕</span><div style="margin-top:8px"><small>${VERSION}</small></div><label style="display:block;margin-top:10px">Остановиться после N новых постов<input id="pla-count" type="number" min="1" max="1000" value="100" style="display:block;width:100%;box-sizing:border-box;padding:9px;margin-top:4px;font-size:16px"></label><div style="display:flex;gap:7px;margin-top:10px"><button id="pla-start" style="flex:1;padding:10px;font-size:16px">▶ Старт</button><button id="pla-stop" style="flex:1;padding:10px;font-size:16px">■ Стоп</button></div><div style="display:flex;gap:7px;margin-top:7px"><button id="pla-export" style="flex:1;padding:9px">Экспорт JSON</button><button id="pla-test" style="flex:1;padding:9px">Самотест</button></div><button id="pla-check" style="width:100%;padding:8px;margin-top:7px">Проверить базу</button><button id="pla-clear" style="width:100%;padding:8px;margin-top:7px">Очистить ТЕСТОВЫЕ данные</button><div id="pla-status" style="margin-top:10px;line-height:1.5"></div><div style="margin-top:8px;font-size:12px;color:#555">Данные сохраняются локально в IndexedDB. Supabase и Gemini этим скриптом не вызываются.</div>`;
+panel.innerHTML=`<b style="font-size:18px">Pumpkin Latte Archive — SAFE</b><span id="pla-x" style="float:right;cursor:pointer;font-size:22px">✕</span><div style="margin-top:8px"><small>${VERSION}</small></div><label style="display:block;margin-top:10px">Остановиться после N новых постов<input id="pla-count" type="number" min="1" max="1000" value="100" style="display:block;width:100%;box-sizing:border-box;padding:9px;margin-top:4px;font-size:16px"></label><div style="display:flex;gap:7px;margin-top:10px"><button id="pla-start" style="flex:1;padding:10px;font-size:16px">▶ Старт</button><button id="pla-stop" style="flex:1;padding:10px;font-size:16px">■ Стоп</button></div><div style="display:flex;gap:7px;margin-top:7px"><button id="pla-export" style="flex:1;padding:9px">Экспорт JSON</button><button id="pla-test" style="flex:1;padding:9px">Самотест</button></div><button id="pla-check" style="width:100%;padding:8px;margin-top:7px">Проверить базу</button><button id="pla-clear" style="width:100%;padding:8px;margin-top:7px">Очистить ТЕСТОВЫЕ данные</button><div id="pla-status" style="margin-top:10px;line-height:1.5"></div><div style="margin-top:8px;font-size:12px;color:#555">Данные сохраняются локально в IndexedDB. Supabase и Gemini этим скриптом не вызываются.</div>`;
 document.body.appendChild(panel);
 const status=panel.querySelector('#pla-status'),countInput=panel.querySelector('#pla-count');
 panel.querySelector('#pla-start').onclick=start;panel.querySelector('#pla-stop').onclick=()=>stop();panel.querySelector('#pla-export').onclick=exportJson;panel.querySelector('#pla-check').onclick=async()=>{await refreshDbCounts();render('База проверена')};panel.querySelector('#pla-clear').onclick=clearTestData;panel.querySelector('#pla-test').onclick=async()=>{const r=await selfTest();console.table(r.tests);console.log('PLA self-test',r)};panel.querySelector('#pla-x').onclick=()=>{stop();panel.style.display='none'};
@@ -493,7 +517,7 @@ async function refreshUi(){
   try{await refreshDbCounts();}catch{}
   render(running?'Собираю…':'Панель восстановлена');
 }
-window.__PLA_FB_ARCHIVE={panel,start,stop,scan:scanVisible,exportJson,selfTest,version:VERSION,dbName:DB_NAME,stats,refresh:refreshUi};
+window.__PLA_FB_ARCHIVE={panel,start,stop,scan:scanVisible,exportJson,selfTest,version:VERSION,dbName:DB_NAME,stats,refresh:refreshUi,monitor:ensureMonitor};
 watchdog=setInterval(async()=>{
   if(!panel.isConnected&&document.body)document.body.appendChild(panel);
   if(running){try{await refreshDbCounts();}catch{};render('Собираю…');}
