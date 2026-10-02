@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.2.0';
+const VERSION='pla-fb-archive-v2.3.0';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -13,7 +13,10 @@ const MAX_CLICKS_PER_CYCLE=8;
 const ACTION_DELAY_MS=320;
 
 if(window.__PLA_FB_ARCHIVE?.panel){
-  window.__PLA_FB_ARCHIVE.panel.style.display='block';
+  const p=window.__PLA_FB_ARCHIVE.panel;
+  if(!p.isConnected&&document.body)document.body.appendChild(p);
+  p.style.display='block';
+  window.__PLA_FB_ARCHIVE.refresh?.();
   return;
 }
 
@@ -323,7 +326,7 @@ async function persistBundle(post,comments,media){
 async function addError(data){try{await reqPromise((await txStore('errors','readwrite')).add({created_at:nowIso(),...data}))}catch{} }
 
 const stats={posts_seen:0,posts_new:0,posts_updated:0,comments_seen:0,comments_new:0,comments_updated:0,media_seen:0,media_new:0,errors:0,comments_incomplete:0};
-let running=false,timer=null,targetNew=100,seenSession=new Set(),emptyScans=0;
+let running=false,timer=null,targetNew=100,seenSession=new Set(),emptyScans=0,watchdog=null;
 
 async function saveCrawlState(extra={}){
   const state={key:STATE_KEY,collector_version:VERSION,schema_version:SCHEMA_VERSION,group:GROUP_PATH,page_url:location.href,updated_at:nowIso(),stats:{...stats},...extra};
@@ -435,6 +438,14 @@ panel.innerHTML=`<b style="font-size:18px">Pumpkin Latte Archive</b><span id="pl
 document.body.appendChild(panel);
 const status=panel.querySelector('#pla-status'),countInput=panel.querySelector('#pla-count');
 panel.querySelector('#pla-start').onclick=start;panel.querySelector('#pla-stop').onclick=()=>stop();panel.querySelector('#pla-export').onclick=exportJson;panel.querySelector('#pla-check').onclick=async()=>{await refreshDbCounts();render('База проверена')};panel.querySelector('#pla-clear').onclick=clearTestData;panel.querySelector('#pla-test').onclick=async()=>{const r=await selfTest();console.table(r.tests);console.log('PLA self-test',r)};panel.querySelector('#pla-x').onclick=()=>{stop();panel.style.display='none'};
-window.__PLA_FB_ARCHIVE={panel,start,stop,scan:scanVisible,exportJson,selfTest,version:VERSION,dbName:DB_NAME,stats};
+async function refreshUi(){
+  try{await refreshDbCounts();}catch{}
+  render(running?'Собираю…':'Панель восстановлена');
+}
+window.__PLA_FB_ARCHIVE={panel,start,stop,scan:scanVisible,exportJson,selfTest,version:VERSION,dbName:DB_NAME,stats,refresh:refreshUi};
+watchdog=setInterval(async()=>{
+  if(!panel.isConnected&&document.body)document.body.appendChild(panel);
+  if(running){try{await refreshDbCounts();}catch{};render('Собираю…');}
+},2000);
 refreshDbCounts().then(()=>render('Готов к запуску')).catch(()=>render('Готов к запуску'));
 })();
