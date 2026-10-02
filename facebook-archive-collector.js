@@ -1,18 +1,18 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.5.0-safe';
+const VERSION='pla-fb-archive-v2.6.0';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
 const UI_ID='pla-fb-archive-panel';
 const GROUP_PATH=(location.pathname.match(/\/groups\/([^/?]+)/)||[])[1]||'facebook-group';
 const STATE_KEY=`crawl:${GROUP_PATH}`;
-const MAX_EXPAND_CYCLES=20;
-const MAX_CLICKS_PER_CYCLE=8;
-const ACTION_DELAY_MS=320;
-const HEARTBEAT_URL='https://ltznpjfnkpydautbsrej.supabase.co/rest/v1/collector_heartbeats';
-const HEARTBEAT_KEY='sb_publishable_tHMD6sI6e5BS9WOqFAeG1A_jFs6ta6d';
+const MAX_EXPAND_CYCLES=2;
+const MAX_CLICKS_PER_CYCLE=2;
+const ACTION_DELAY_MS=450;
+const INGEST_URL='https://ltznpjfnkpydautbsrej.supabase.co/functions/v1/collector-ingest';
+const PUBLISHABLE_KEY='sb_publishable_tHMD6sI6e5BS9WOqFAeG1A_jFs6ta6d';
 const COLLECTOR_ID_KEY='pla_collector_id';
 
 if(window.__PLA_FB_ARCHIVE?.panel){
@@ -29,7 +29,8 @@ const RX={
   allComments:/^(all comments|все комментарии|כל התגובות)$/i,
   relevantComments:/(most relevant|самые актуаль|наиболее актуаль|relevant|רלוונט)/i,
   interaction:/^(Нравится|Ответить|Поделиться|Like|Reply|Share|Комментировать|אהבתי|השב|שתף)$/i,
-  metaOnly:/^(Автор|Администратор|Author|Admin|·)$/i
+  metaOnly:/^(Автор|Администратор|Author|Admin|·)$/i,
+  relativeTime:/^\d+\s*(мин|минута|минуты|минут|ч|час|часа|часов|дн|день|дня|дней|нед|неделя|недели|недель|min|m|hr|h|day|days|week|weeks)\.?$/i
 };
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -61,6 +62,30 @@ function parseDate(raw){
   return null;
 }
 
+function dateFromRoot(root,mode='post'){
+  const rr=root.getBoundingClientRect?.()||{top:0,height:1000};
+  const maxTop=rr.top+(mode==='post'?240:180);
+  for(const el of root.querySelectorAll?.('time[datetime],abbr[data-utime],[data-utime]')||[]){
+    const nearest=el.closest?.('[role="article"]');
+    if(nearest&&nearest!==root)continue;
+    const r=el.getBoundingClientRect?.()||{top:0};
+    if(r.top>maxTop)continue;
+    const dt=el.getAttribute('datetime');
+    if(dt){const d=new Date(dt);if(!isNaN(d))return d;}
+    const ut=el.getAttribute('data-utime');
+    if(ut&&/^\d{9,13}$/.test(ut)){const n=Number(ut);const d=new Date(n>1e12?n:n*1000);if(!isNaN(d))return d;}
+  }
+  for(const el of root.querySelectorAll?.('a[aria-label],a[title],span[aria-label],span[title]')||[]){
+    const nearest=el.closest?.('[role="article"]');
+    if(nearest&&nearest!==root)continue;
+    const r=el.getBoundingClientRect?.()||{top:0};
+    if(r.top>maxTop)continue;
+    const raw=[el.getAttribute('aria-label'),el.getAttribute('title'),text(el)].filter(Boolean).join(' ');
+    const d=parseDate(raw);if(d&&!isNaN(d))return d;
+  }
+  return null;
+}
+
 function topArticles(root=document){
   return [...root.querySelectorAll('[role="article"]')].filter(a=>!a.parentElement?.closest?.('[role="article"]'));
 }
@@ -76,7 +101,7 @@ function permalinkMeta(article){
     if(r.top>ar.top+Math.min(260,ar.height*.35))continue;
     const id=(href.match(/\/(?:posts|permalink)\/(\d+)/)||href.match(/[?&]story_fbid=(\d+)/)||[])[1];
     if(!id)continue;
-    const d=parseDate([a.getAttribute('aria-label'),a.getAttribute('title'),text(a)].filter(Boolean).join(' '));
+    const d=parseDate([a.getAttribute('aria-label'),a.getAttribute('title'),text(a)].filter(Boolean).join(' '))||dateFromRoot(article,'post');
     candidates.push({facebook_post_id:id,canonical_url:(new URL(href,location.origin)).href.split('?')[0],posted_at:d&&!isNaN(d)?d.toISOString():null,y:r.top});
   }
   candidates.sort((a,b)=>a.y-b.y);
@@ -97,22 +122,31 @@ function stableProfileFromHref(href){
 
 function extractAuthor(root){
   const rr=root.getBoundingClientRect?.()||{top:0,height:1000};
-  const links=[...root.querySelectorAll('a[href]')];
-  for(const a of links){
+  const candidates=[];
+  for(const a of root.querySelectorAll('a[href]')){
+    const nearest=a.closest?.('[role="article"]');
+    if(nearest&&nearest!==root)continue;
     const name=norm(text(a));
     const href=a.href||a.getAttribute('href')||'';
-    if(!name||name.length>120||!href)continue;
-    if(/\/groups\/|\/posts\/|\/permalink\/|story_fbid=|photo\//.test(href))continue;
+    if(!name||name.length<2||name.length>120||!href)continue;
+    if(RX.relativeTime.test(name)||RX.interaction.test(name)||RX.metaOnly.test(name))continue;
+    if(/\/groups\/|\/posts\/|\/permalink\/|story_fbid=|\/photo\//.test(href))continue;
     const r=a.getBoundingClientRect?.()||{top:0};
-    if(r.top>rr.top+Math.min(180,rr.height*.3))continue;
+    if(r.top>rr.top+Math.min(220,rr.height*.35))continue;
     const p=stableProfileFromHref(href);
-    return {display_name:name,facebook_author_id:p.facebook_author_id,profile_url:p.profile_url};
+    let score=0;
+    if(p.facebook_author_id)score+=20;
+    if(/^https?:\/\/(www\.)?facebook\.com\//.test(href))score+=10;
+    score+=Math.max(0,200-Math.max(0,r.top-rr.top))/20;
+    candidates.push({score,display_name:name,facebook_author_id:p.facebook_author_id,profile_url:p.profile_url});
   }
-  return {display_name:null,facebook_author_id:null,profile_url:null};
+  candidates.sort((a,b)=>b.score-a.score);
+  const a=candidates[0];
+  return a?{display_name:a.display_name,facebook_author_id:a.facebook_author_id,profile_url:a.profile_url}:{display_name:null,facebook_author_id:null,profile_url:null};
 }
 
 function cleanLines(s){
-  return norm(s).split('\n').map(norm).filter(Boolean).filter(x=>!RX.interaction.test(x)&&!RX.metaOnly.test(x)&&!RX.commentExpand.test(x)&&!RX.moreText.test(x));
+  return norm(s).split('\n').map(norm).filter(Boolean).filter(x=>!RX.interaction.test(x)&&!RX.metaOnly.test(x)&&!RX.commentExpand.test(x)&&!RX.moreText.test(x)&&!RX.relativeTime.test(x));
 }
 
 function extractOwnText(root,mode='post'){
@@ -152,6 +186,8 @@ function commentPermalinkId(article){
 }
 
 function commentDate(article){
+  const d0=dateFromRoot(article,'comment');
+  if(d0&&!isNaN(d0))return d0.toISOString();
   for(const a of article.querySelectorAll?.('a[href]')||[]){
     const raw=[a.getAttribute('aria-label'),a.getAttribute('title'),text(a)].filter(Boolean).join(' ');
     const d=parseDate(raw);if(d&&!isNaN(d))return d.toISOString();
@@ -230,9 +266,12 @@ function isClickableControl(el){return el&&visible(el)&&(el.tagName==='BUTTON'||
 function clickSafe(el){try{el.click();return true}catch{return false}}
 
 async function expandPostText(article){
+  if(!article?.isConnected)return 0;
   let n=0;
   for(const el of article.querySelectorAll('div[role="button"],span[role="button"],button')){
-    const s=text(el);if(RX.moreText.test(s)&&isClickableControl(el)){clickSafe(el);n++;if(n>=3)break;}
+    if(el.closest?.('[role="article"]')!==article)continue;
+    const s=text(el);
+    if(RX.moreText.test(s)&&isClickableControl(el)){clickSafe(el);n++;break;}
   }
   if(n)await sleep(ACTION_DELAY_MS);
   return n;
@@ -249,23 +288,27 @@ async function tryAllComments(article){
 }
 
 function remainingExpandControls(article){
-  return [...article.querySelectorAll('div[role="button"],span[role="button"],button')].filter(el=>{const s=text(el);return s&&s.length<180&&RX.commentExpand.test(s)&&visible(el)});
+  return [...article.querySelectorAll('div[role="button"],span[role="button"],button')].filter(el=>{
+    const s=text(el);if(!s||s.length>=180||!visible(el))return false;
+    const owner=el.closest?.('[role="article"]');
+    const nested=owner&&owner!==article;
+    return RX.commentExpand.test(s)||(nested&&RX.moreText.test(s));
+  });
 }
 
 async function expandComments(article){
-  let stable=0,previous=-1,totalClicks=0;
+  let totalClicks=0;
   for(let cycle=0;cycle<MAX_EXPAND_CYCLES;cycle++){
-    const before=article.querySelectorAll('[role="article"]').length;
+    if(!article?.isConnected)break;
     const controls=remainingExpandControls(article).slice(0,MAX_CLICKS_PER_CYCLE);
-    let clicked=0;
-    for(const el of controls){if(clickSafe(el)){clicked++;totalClicks++;await sleep(120)}}
-    if(clicked)await sleep(ACTION_DELAY_MS);
-    const after=article.querySelectorAll('[role="article"]').length;
-    if(after===previous||after===before)stable++;else stable=0;
-    previous=after;
-    if(!controls.length||stable>=2)break;
+    if(!controls.length)break;
+    for(const el of controls){
+      if(!article.isConnected)break;
+      if(clickSafe(el)){totalClicks++;await sleep(180);}
+    }
+    if(totalClicks)await sleep(ACTION_DELAY_MS);
   }
-  return {totalClicks,complete:remainingExpandControls(article).length===0};
+  return {totalClicks,complete:article?.isConnected?remainingExpandControls(article).length===0:false};
 }
 
 function openDb(){
@@ -307,57 +350,115 @@ function getCollectorId(){
   return id;
 }
 
-function monitorHtml(){
-  const endpoint="https://ltznpjfnkpydautbsrej.supabase.co/rest/v1/collector_heartbeats";
-  const key="sb_publishable_tHMD6sI6e5BS9WOqFAeG1A_jFs6ta6d";
-  return `<!doctype html><meta charset="utf-8"><title>Pumpkin Monitor</title>
-  <body style="font:16px Arial;padding:14px;line-height:1.5"><b style="font-size:20px">Pumpkin Collector Monitor</b>
-  <div id="s" style="margin-top:12px">Жду данные…</div>
-  <script>
-  const endpoint=${JSON.stringify(endpoint)}, key=${JSON.stringify(key)};
-  const s=document.getElementById('s');
-  addEventListener('message',async e=>{
-    const m=e.data;
-    if(!m||m.type!=='pla-heartbeat')return;
-    const p=m.payload;
-    s.innerHTML='Статус: <b>'+p.status+'</b><br>Посты: <b>'+p.posts+'</b><br>Комментарии: <b>'+p.comments+'</b><br>Медиа: <b>'+p.media+'</b><br>Авторы: <b>'+p.authors+'</b><br>Ошибки: <b>'+p.errors+'</b><br>Последнее сохранение: <b>'+(p.last_saved_at||'—')+'</b><br><small>Отправляю состояние в Supabase…</small>';
-    try{
-      const r=await fetch(endpoint,{method:'POST',headers:{apikey:key,'Content-Type':'application/json',Prefer:'return=minimal'},body:JSON.stringify(p)});
-      s.innerHTML += '<br><b>'+(r.ok?'Supabase: OK':'Supabase: HTTP '+r.status)+'</b>';
-    }catch(err){
-      s.innerHTML += '<br><b>Supabase: ошибка сети</b>';
-    }
-  });
-  </script>`;
-}
-
-function ensureMonitor(){
+function ensureSyncWindow(){
   try{
-    if(monitorWin&&!monitorWin.closed)return monitorWin;
-    monitorWin=window.open('data:text/html;charset=utf-8,'+encodeURIComponent(monitorHtml()),'PLA_MONITOR','width=380,height=430');
-    return monitorWin;
+    if(syncWin&&!syncWin.closed)return syncWin;
+    syncWin=window.open('about:blank','PLA_SYNC','width=420,height=300');
+    if(syncWin){
+      try{
+        syncWin.document.open();
+        syncWin.document.write('<meta charset="utf-8"><title>Pumpkin Sync</title><body style="font:16px Arial;padding:18px"><b>Pumpkin → Supabase</b><p>Окно синхронизации. Не закрывайте его, пока идёт сбор.</p>');
+        syncWin.document.close();
+      }catch{}
+    }
+    return syncWin;
   }catch{return null;}
 }
 
-async function sendHeartbeat(statusOverride){
-  try{
-    await refreshDbCounts();
-    const payload={
-      collector_id:getCollectorId(),
-      group_slug:GROUP_PATH,
-      collector_version:VERSION,
-      status:statusOverride||(running?'running':'stopped'),
-      posts:dbCounts.posts,
-      comments:dbCounts.comments,
-      media:dbCounts.media,
-      authors:dbCounts.authors,
-      errors:dbCounts.errors,
-      last_saved_at:lastSavedAt,
-      client_at:nowIso()
-    };
-    const w=ensureMonitor();
-    if(w&&!w.closed)w.postMessage({type:'pla-heartbeat',payload},'*');
-  }catch{}
+async function buildSyncPayload(postKey){
+  const post=await getOne('posts',postKey);
+  if(!post?.facebook_post_id||!/^fb:pumpkinlatte:post:[0-9]+$/.test(post.key))return null;
+  const [allComments,allMedia,allAuthors]=await Promise.all([getAll('comments'),getAll('media'),getAll('authors')]);
+  const comments=allComments.filter(c=>c.post_key===postKey);
+  const commentKeys=new Set(comments.map(c=>c.key));
+  const media=allMedia.filter(m=>m.owner_key===postKey||commentKeys.has(m.owner_key));
+  const authorKeys=new Set([post.author_key,...comments.map(c=>c.author_key)].filter(Boolean));
+  const authors=allAuthors.filter(a=>authorKeys.has(a.key));
+  return {
+    collector_version:VERSION,
+    schema_version:SCHEMA_VERSION,
+    collector_id:getCollectorId(),
+    batch_key:post.key,
+    facebook_post_id:String(post.facebook_post_id),
+    group:{platform:'facebook',identifier:'pumpkinlatte',url:'https://www.facebook.com/groups/pumpkinlatte/'},
+    posts:[post],
+    comments,
+    media,
+    authors
+  };
+}
+
+async function markSyncStatus(postKey,statusValue,error=''){
+  const post=await getOne('posts',postKey);
+  if(!post)return;
+  await putOne('posts',{...post,sync_status:statusValue,sync_error:error||null,synced_at:statusValue==='synced'?nowIso():(post.synced_at||null)});
+}
+
+function submitPayloadAndWait(payload){
+  return new Promise(resolve=>{
+    const w=ensureSyncWindow();
+    if(!w){resolve({ok:false,error:'popup_blocked'});return;}
+    const form=document.createElement('form');
+    form.method='POST';form.action=INGEST_URL;form.target='PLA_SYNC';form.style.display='none';
+    for(const [name,value] of [['api_key',PUBLISHABLE_KEY],['mode','popup'],['payload',JSON.stringify(payload)]]){
+      const input=document.createElement('input');input.type='hidden';input.name=name;input.value=value;form.appendChild(input);
+    }
+    document.body.appendChild(form);
+    try{form.submit();}catch(e){form.remove();resolve({ok:false,error:String(e?.message||e)});return;}
+    form.remove();
+    let checks=0;
+    const timer=setInterval(()=>{
+      checks++;
+      try{
+        if(w.closed){clearInterval(timer);resolve({ok:false,error:'popup_closed'});return;}
+        const href=w.location.href||'';
+        if(href.startsWith(location.origin+'/')){
+          const u=new URL(href);
+          if(u.searchParams.get('pla_sync')===payload.batch_key){
+            clearInterval(timer);
+            resolve({ok:u.searchParams.get('pla_ok')==='1',error:u.searchParams.get('pla_error')||''});
+            return;
+          }
+        }
+      }catch{}
+      if(checks>=40){clearInterval(timer);resolve({ok:false,error:'sync_timeout'});}
+    },500);
+  });
+}
+
+async function drainSyncQueue(){
+  if(syncBusy)return;
+  syncBusy=true;
+  while(syncQueue.length){
+    const postKey=syncQueue.shift();
+    await markSyncStatus(postKey,'sending');
+    const payload=await buildSyncPayload(postKey);
+    if(!payload){await markSyncStatus(postKey,'local_only','no_facebook_post_id');continue;}
+    const result=await submitPayloadAndWait(payload);
+    if(result.ok){syncSubmitted++;await markSyncStatus(postKey,'synced');}
+    else{syncFailed++;await markSyncStatus(postKey,'pending',result.error||'sync_failed');}
+    render(result.ok?'Supabase: сохранено':'Supabase: повторим позже');
+    await sleep(250);
+  }
+  syncBusy=false;
+  render();
+}
+
+function queueSyncPost(postKey,force=false){
+  if(!/^fb:pumpkinlatte:post:[0-9]+$/.test(postKey||''))return;
+  if(!force&&syncQueuedKeys.has(postKey))return;
+  syncQueuedKeys.add(postKey);
+  syncQueue.push(postKey);
+  void drainSyncQueue();
+}
+
+async function syncAllLocal(){
+  ensureSyncWindow();
+  const posts=await getAll('posts');
+  for(const p of posts){
+    if(/^fb:pumpkinlatte:post:[0-9]+$/.test(p.key||'')&&p.sync_status!=='synced')queueSyncPost(p.key,true);
+  }
+  render('Поставил локальную базу в очередь Supabase');
 }
 
 async function persistAuthor(author){
@@ -391,7 +492,7 @@ async function persistBundle(post,comments,media){
 async function addError(data){try{await reqPromise((await txStore('errors','readwrite')).add({created_at:nowIso(),...data}))}catch{} }
 
 const stats={posts_seen:0,posts_new:0,posts_updated:0,comments_seen:0,comments_new:0,comments_updated:0,media_seen:0,media_new:0,errors:0,comments_incomplete:0};
-let running=false,timer=null,targetNew=100,seenSession=new Set(),emptyScans=0,watchdog=null,heartbeatTimer=null,monitorWin=null;
+let running=false,timer=null,targetNew=100,seenSession=new Set(),emptyScans=0,watchdog=null,syncWin=null,syncQueue=[],syncQueuedKeys=new Set(),syncBusy=false,syncSubmitted=0,syncFailed=0;
 
 async function saveCrawlState(extra={}){
   const state={key:STATE_KEY,collector_version:VERSION,schema_version:SCHEMA_VERSION,group:GROUP_PATH,page_url:location.href,updated_at:nowIso(),stats:{...stats},...extra};
@@ -399,13 +500,18 @@ async function saveCrawlState(extra={}){
 }
 
 async function processArticle(article){
-  // SAFE MODE: never click Facebook controls. Read only what is already loaded.
+  if(!article?.isConnected)return null;
+  await expandPostText(article);
+  if(!article.isConnected)return null;
+  const expansion=await expandComments(article);
+  if(!article.isConnected)return null;
+
   const post=await buildPostRecord(article);
   if(seenSession.has(post.key))return null;
   seenSession.add(post.key);stats.posts_seen++;
   const comments=await buildComments(article,post);
   stats.comments_seen+=comments.length;
-  post.comments_complete=remainingExpandControls(article).length===0;
+  post.comments_complete=expansion.complete;
   if(!post.comments_complete)stats.comments_incomplete++;
   let media=mediaFromRoot(article,'post',post.key).map(m=>({...m,owner_key:post.key}));
   for(const c of comments){for(const m of mediaFromRoot(c._article,'comment',c.key))media.push({...m,owner_key:c.key});}
@@ -417,7 +523,7 @@ async function processArticle(article){
   lastSavedAt=nowIso();
   await saveCrawlState({checkpoint:{post_key:post.key,facebook_post_id:post.facebook_post_id,posted_at:post.posted_at,canonical_url:post.canonical_url,saved_at:lastSavedAt}});
   await refreshDbCounts();
-  sendHeartbeat();
+  queueSyncPost(post.key);
   return {post,result};
 }
 
@@ -451,21 +557,17 @@ async function tick(){
 function start(){
   if(running)return;
   targetNew=Math.max(1,Math.min(1000,Number(countInput.value)||100));
-  ensureMonitor();
+  ensureSyncWindow();
   emptyScans=0;
   running=true;
   render('Собираю…');
-  sendHeartbeat('running');
-  if(!heartbeatTimer)heartbeatTimer=setInterval(()=>sendHeartbeat(),10000);
   tick();
 }
 function stop(msg='Остановлено'){
   running=false;
   if(timer)clearTimeout(timer);timer=null;
-  if(heartbeatTimer)clearInterval(heartbeatTimer);heartbeatTimer=null;
   saveCrawlState({status:'stopped'}).catch(()=>{});
   render(msg);
-  sendHeartbeat('stopped');
 }
 
 async function exportJson(){
@@ -485,42 +587,52 @@ async function selfTest(){
   try{
     const h=await sha256('abc');ok('SHA-256',h==='ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
     const dp=new DOMParser();
-    const doc=dp.parseFromString(`<main><div role="article" id="post"><a href="https://www.facebook.com/groups/help/posts/123456789/" aria-label="2 октября 2026">2 октября 2026</a><a href="https://www.facebook.com/alice">Alice</a><div data-ad-preview="message">Как оформить арнону?</div><img src="https://example.com/photo.jpg" width="640" height="480" alt="document"><div role="article" id="c1"><a href="https://www.facebook.com/bob">Bob</a><div dir="auto">Первый ответ</div><a href="https://www.facebook.com/groups/help/posts/123?comment_id=555">1 ч</a><div role="article" id="r1"><a href="https://www.facebook.com/carol">Carol</a><div dir="auto">Уточнение</div><a href="https://www.facebook.com/groups/help/posts/123?comment_id=555&reply_comment_id=556">30 мин</a></div></div></div></main>`,'text/html');
+    const doc=dp.parseFromString(`<main><div role="article" id="post"><a href="https://www.facebook.com/alice">Alice Example</a><a href="https://www.facebook.com/groups/help/posts/123456789/" aria-label="2 октября 2026">2 октября 2026</a><div data-ad-preview="message">Как оформить арнону?</div><img src="https://example.com/photo.jpg" width="640" height="480" alt="document"><div role="article" id="c1"><a href="https://www.facebook.com/bob">Bob Example</a><div dir="auto">Первый ответ</div><a href="https://www.facebook.com/groups/help/posts/123?comment_id=555">1 ч</a><div role="article" id="r1"><a href="https://www.facebook.com/carol">Carol Example</a><div dir="auto">Уточнение</div><a href="https://www.facebook.com/groups/help/posts/123?comment_id=555&reply_comment_id=556">30 мин</a></div></div></div></main>`,'text/html');
     const p=doc.querySelector('#post');
     for(const e of doc.querySelectorAll('*'))e.getBoundingClientRect=()=>({top:0,bottom:100,width:640,height:100});
+    p.getBoundingClientRect=()=>({top:0,bottom:500,width:640,height:500});
     const pm=permalinkMeta(p);ok('post id',pm?.facebook_post_id==='123456789',JSON.stringify(pm));
+    ok('post date',!!pm?.posted_at&&pm.posted_at.startsWith('2026-10-02'),pm?.posted_at||'');
     ok('post text',extractOwnText(p,'post').includes('Как оформить арнону?'));
+    const au=extractAuthor(p);ok('author',au.display_name==='Alice Example',JSON.stringify(au));
     const pr=await buildPostRecord(p);const cs=await buildComments(p,pr);
     ok('comment id',cs.some(x=>x.facebook_comment_id==='555'));
     ok('reply id',cs.some(x=>x.facebook_comment_id==='556'));
     ok('reply parent',cs.some(x=>x.facebook_comment_id==='556'&&x.parent_comment_key));
+    ok('reply depth',cs.some(x=>x.facebook_comment_id==='556'&&x.depth>0));
+    ok('relative time filtered',cleanLines('1 дн.\nПолезный ответ').join('\n')==='Полезный ответ');
     const k1=(await buildPostRecord(p)).key,k2=(await buildPostRecord(p)).key;ok('stable post key',k1===k2);
     const noid=dp.parseFromString('<div role="article"><a href="https://www.facebook.com/alice">Alice</a><div data-ad-preview="message">Текст без ID</div></div>','text/html').body.firstElementChild;
     for(const e of noid.querySelectorAll('*'))e.getBoundingClientRect=()=>({top:0,bottom:100,width:640,height:100});
     noid.getBoundingClientRect=()=>({top:0,bottom:100,width:640,height:100});
     const f1=(await buildPostRecord(noid)).key,f2=(await buildPostRecord(noid)).key;ok('fallback hash stable',f1===f2&&f1.includes('posthash:'));
+    const tdoc=dp.parseFromString('<div role="article"><span data-utime="1790899200"></span></div>','text/html').body.firstElementChild;
+    for(const e of tdoc.querySelectorAll('*'))e.getBoundingClientRect=()=>({top:0,bottom:100,width:640,height:100});
+    tdoc.getBoundingClientRect=()=>({top:0,bottom:100,width:640,height:100});
+    ok('data-utime date',dateFromRoot(tdoc,'post') instanceof Date);
+    ok('date line is not comment text',cleanLines('3 дн.').length===0);
   }catch(e){ok('self-test runtime',false,String(e?.stack||e));}
   const passed=tests.filter(x=>x.pass).length,failed=tests.length-passed;render(`Самотест: ${passed} PASS / ${failed} FAIL`);return {version:VERSION,passed,failed,tests};
 }
 
 function render(msg=''){
   if(!status)return;
-  status.innerHTML=(msg?`<b>${esc(msg)}</b><br>`:'')+`Статус: <b>${running?'РАБОТАЕТ':'ОСТАНОВЛЕН'}</b><br>В базе: посты <b>${dbCounts.posts}</b> · комментарии <b>${dbCounts.comments}</b> · медиа <b>${dbCounts.media}</b> · авторы <b>${dbCounts.authors}</b> · ошибки <b>${dbCounts.errors}</b><br>Постов просмотрено сейчас: <b>${stats.posts_seen}</b><br>Новых: <b>${stats.posts_new}</b> · обновлённых: <b>${stats.posts_updated}</b><br>Комментариев сейчас: <b>${stats.comments_seen}</b> · новых: <b>${stats.comments_new}</b><br>Неполные комментарии: <b>${stats.comments_incomplete}</b><br>Последнее сохранение: <b>${lastSavedAt?new Date(lastSavedAt).toLocaleTimeString():'—'}</b>`;
+  status.innerHTML=(msg?`<b>${esc(msg)}</b><br>`:'')+`Статус: <b>${running?'РАБОТАЕТ':'ОСТАНОВЛЕН'}</b><br>В базе: посты <b>${dbCounts.posts}</b> · комментарии <b>${dbCounts.comments}</b> · медиа <b>${dbCounts.media}</b> · авторы <b>${dbCounts.authors}</b> · ошибки <b>${dbCounts.errors}</b><br>Постов просмотрено сейчас: <b>${stats.posts_seen}</b><br>Новых: <b>${stats.posts_new}</b> · обновлённых: <b>${stats.posts_updated}</b><br>Комментариев сейчас: <b>${stats.comments_seen}</b> · новых: <b>${stats.comments_new}</b><br>Неполные комментарии: <b>${stats.comments_incomplete}</b><br>Supabase: отправлено <b>${syncSubmitted}</b> · ждут <b>${syncQueue.length}</b> · ошибки <b>${syncFailed}</b><br>Последнее сохранение: <b>${lastSavedAt?new Date(lastSavedAt).toLocaleTimeString():'—'}</b>`;
 }
 
 const panel=document.createElement('div');panel.id=UI_ID;panel.style='position:fixed;top:12px;right:12px;width:400px;max-height:92vh;overflow:auto;z-index:2147483647;background:#fff;color:#111;border:2px solid #1877f2;border-radius:12px;padding:14px;font:16px/1.4 Arial,sans-serif;box-shadow:0 4px 20px #0005';
-panel.innerHTML=`<b style="font-size:18px">Pumpkin Latte Archive — SAFE</b><span id="pla-x" style="float:right;cursor:pointer;font-size:22px">✕</span><div style="margin-top:8px"><small>${VERSION}</small></div><label style="display:block;margin-top:10px">Остановиться после N новых постов<input id="pla-count" type="number" min="1" max="1000" value="100" style="display:block;width:100%;box-sizing:border-box;padding:9px;margin-top:4px;font-size:16px"></label><div style="display:flex;gap:7px;margin-top:10px"><button id="pla-start" style="flex:1;padding:10px;font-size:16px">▶ Старт</button><button id="pla-stop" style="flex:1;padding:10px;font-size:16px">■ Стоп</button></div><div style="display:flex;gap:7px;margin-top:7px"><button id="pla-export" style="flex:1;padding:9px">Экспорт JSON</button><button id="pla-test" style="flex:1;padding:9px">Самотест</button></div><button id="pla-check" style="width:100%;padding:8px;margin-top:7px">Проверить базу</button><button id="pla-clear" style="width:100%;padding:8px;margin-top:7px">Очистить ТЕСТОВЫЕ данные</button><div id="pla-status" style="margin-top:10px;line-height:1.5"></div><div style="margin-top:8px;font-size:12px;color:#555">Данные сохраняются локально в IndexedDB. Supabase и Gemini этим скриптом не вызываются.</div>`;
+panel.innerHTML=`<b style="font-size:18px">Pumpkin Latte Archive</b><span id="pla-x" style="float:right;cursor:pointer;font-size:22px">✕</span><div style="margin-top:8px"><small>${VERSION}</small></div><label style="display:block;margin-top:10px">Остановиться после N новых постов<input id="pla-count" type="number" min="1" max="1000" value="100" style="display:block;width:100%;box-sizing:border-box;padding:9px;margin-top:4px;font-size:16px"></label><div style="display:flex;gap:7px;margin-top:10px"><button id="pla-start" style="flex:1;padding:10px;font-size:16px">▶ Старт</button><button id="pla-stop" style="flex:1;padding:10px;font-size:16px">■ Стоп</button></div><div style="display:flex;gap:7px;margin-top:7px"><button id="pla-export" style="flex:1;padding:9px">Экспорт JSON</button><button id="pla-test" style="flex:1;padding:9px">Самотест</button></div><button id="pla-sync" style="width:100%;padding:9px;margin-top:7px">Синхронизировать локальную базу → Supabase</button><button id="pla-check" style="width:100%;padding:8px;margin-top:7px">Проверить базу</button><button id="pla-clear" style="width:100%;padding:8px;margin-top:7px">Очистить ТЕСТОВЫЕ данные</button><div id="pla-status" style="margin-top:10px;line-height:1.5"></div><div style="margin-top:8px;font-size:12px;color:#555">Сначала данные сохраняются в IndexedDB, затем автоматически отправляются в приватный архив Supabase. Локальная копия остаётся страховкой.</div>`;
 document.body.appendChild(panel);
 const status=panel.querySelector('#pla-status'),countInput=panel.querySelector('#pla-count');
-panel.querySelector('#pla-start').onclick=start;panel.querySelector('#pla-stop').onclick=()=>stop();panel.querySelector('#pla-export').onclick=exportJson;panel.querySelector('#pla-check').onclick=async()=>{await refreshDbCounts();render('База проверена')};panel.querySelector('#pla-clear').onclick=clearTestData;panel.querySelector('#pla-test').onclick=async()=>{const r=await selfTest();console.table(r.tests);console.log('PLA self-test',r)};panel.querySelector('#pla-x').onclick=()=>{stop();panel.style.display='none'};
+panel.querySelector('#pla-start').onclick=start;panel.querySelector('#pla-stop').onclick=()=>stop();panel.querySelector('#pla-export').onclick=exportJson;panel.querySelector('#pla-sync').onclick=syncAllLocal;panel.querySelector('#pla-check').onclick=async()=>{await refreshDbCounts();render('База проверена')};panel.querySelector('#pla-clear').onclick=clearTestData;panel.querySelector('#pla-test').onclick=async()=>{const r=await selfTest();console.table(r.tests);console.log('PLA self-test',r)};panel.querySelector('#pla-x').onclick=()=>{stop();panel.style.display='none'};
 async function refreshUi(){
   try{await refreshDbCounts();}catch{}
   render(running?'Собираю…':'Панель восстановлена');
 }
-window.__PLA_FB_ARCHIVE={panel,start,stop,scan:scanVisible,exportJson,selfTest,version:VERSION,dbName:DB_NAME,stats,refresh:refreshUi,monitor:ensureMonitor};
+window.__PLA_FB_ARCHIVE={panel,start,stop,scan:scanVisible,exportJson,selfTest,syncAll:syncAllLocal,version:VERSION,dbName:DB_NAME,stats,refresh:refreshUi};
 watchdog=setInterval(async()=>{
   if(!panel.isConnected&&document.body)document.body.appendChild(panel);
   if(running){try{await refreshDbCounts();}catch{};render('Собираю…');}
 },2000);
-refreshDbCounts().then(()=>{render('Готов к запуску');sendHeartbeat('ready')}).catch(()=>render('Готов к запуску'));
+refreshDbCounts().then(()=>render('Готов к запуску')).catch(()=>render('Готов к запуску'));
 })();
