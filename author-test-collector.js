@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-author-test-v2.6.7';
+const VERSION='pla-author-test-v2.6.8-dates';
 const UI_ID='pla-author-test-panel';
 const DB_NAME='pumpkin_latte_author_test';
 const DB_VERSION=1;
@@ -168,25 +168,117 @@ function extractText(root){
   return candidates[0]||'';
 }
 
+function dedupeDateRaw(raw){
+  const s=norm(raw).replace(/\u202f/g,' ');
+  const parts=s.split(/\s+/).filter(Boolean);
+  if(parts.length>=2&&parts.length%2===0){
+    const half=parts.length/2;
+    const a=parts.slice(0,half).join(' ');
+    const b=parts.slice(half).join(' ');
+    if(a===b)return a;
+  }
+  return s;
+}
+
+function atLocalNoon(year,month,day){
+  const d=new Date(year,month,day,12,0,0,0);
+  return Number.isNaN(d.getTime())?null:d;
+}
+
+function parseFacebookDate(raw,now=new Date()){
+  let s=dedupeDateRaw(raw).toLowerCase().replace(/\s+/g,' ').trim();
+  if(!s)return {iso:null,precision:null};
+
+  if(/^\d{10,13}$/.test(s)){
+    const n=Number(s);
+    const d=new Date(s.length===10?n*1000:n);
+    return Number.isNaN(d.getTime())?{iso:null,precision:null}:{iso:d.toISOString(),precision:'exact'};
+  }
+
+  const monthMap={
+    'январь':0,'января':0,'янв':0,
+    'февраль':1,'февраля':1,'фев':1,
+    'март':2,'марта':2,'мар':2,
+    'апрель':3,'апреля':3,'апр':3,
+    'май':4,'мая':4,
+    'июнь':5,'июня':5,'июн':5,
+    'июль':6,'июля':6,'июл':6,
+    'август':7,'августа':7,'авг':7,
+    'сентябрь':8,'сентября':8,'сен':8,'сент':8,
+    'октябрь':9,'октября':9,'окт':9,
+    'ноябрь':10,'ноября':10,'ноя':10,
+    'декабрь':11,'декабря':11,'дек':11
+  };
+
+  if(/^(сегодня|today|היום)$/.test(s)){
+    const d=atLocalNoon(now.getFullYear(),now.getMonth(),now.getDate());
+    return {iso:d?.toISOString()||null,precision:'day'};
+  }
+  if(/^(вчера|yesterday|אתמול)$/.test(s)){
+    const d=atLocalNoon(now.getFullYear(),now.getMonth(),now.getDate()-1);
+    return {iso:d?.toISOString()||null,precision:'day'};
+  }
+
+  let m=s.match(/^(\d+)\s*(мин|минута|минуты|минут|m|min|ч|час|часа|часов|h|hr|дн|день|дня|дней|day|days|нед|неделя|недели|недель|week|weeks)\.?$/i);
+  if(m){
+    const n=Number(m[1]);
+    const unit=m[2].toLowerCase();
+    if(/^(мин|минута|минуты|минут|m|min)$/.test(unit)){
+      return {iso:new Date(now.getTime()-n*60000).toISOString(),precision:'minute'};
+    }
+    if(/^(ч|час|часа|часов|h|hr)$/.test(unit)){
+      return {iso:new Date(now.getTime()-n*3600000).toISOString(),precision:'hour'};
+    }
+    const days=/^(нед|неделя|недели|недель|week|weeks)$/.test(unit)?n*7:n;
+    const d=atLocalNoon(now.getFullYear(),now.getMonth(),now.getDate()-days);
+    return {iso:d?.toISOString()||null,precision:'day'};
+  }
+
+  s=s.replace(/\s+г\.?$/,'').trim();
+  m=s.match(/^(\d{1,2})\s+([а-яё]+)(?:\s+(\d{4}))?(?:\s+в\s+(\d{1,2}):(\d{2}))?$/i);
+  if(m&&monthMap[m[2]]!==undefined){
+    const day=Number(m[1]),month=monthMap[m[2]];
+    let year=m[3]?Number(m[3]):now.getFullYear();
+    const hasTime=m[4]!==undefined;
+    let d=hasTime
+      ? new Date(year,month,day,Number(m[4]),Number(m[5]),0,0)
+      : atLocalNoon(year,month,day);
+    if(!m[3]&&d&&d.getTime()>now.getTime()+7*86400000){
+      year--;
+      d=hasTime
+        ? new Date(year,month,day,Number(m[4]),Number(m[5]),0,0)
+        : atLocalNoon(year,month,day);
+    }
+    if(d&&!Number.isNaN(d.getTime())){
+      return {iso:d.toISOString(),precision:hasTime?'minute':'day'};
+    }
+  }
+
+  return {iso:null,precision:null};
+}
+
 function rawDate(root){
   for(const e of root.querySelectorAll('[data-utime]')){
     const u=Number(e.getAttribute('data-utime'));
-    if(Number.isFinite(u)&&u>1e9)return {iso:new Date(u*1000).toISOString(),raw:String(u)};
+    if(Number.isFinite(u)&&u>1e9)return {iso:new Date(u*1000).toISOString(),raw:String(u),precision:'exact'};
   }
   for(const a of root.querySelectorAll('a[href]')){
     const href=a.href||'';
     if(!/\/posts\/\d+|story_fbid=/.test(href))continue;
-    const raw=norm([a.getAttribute('aria-label'),a.getAttribute('title'),text(a)].filter(Boolean).join(' '));
-    if(raw)return {iso:null,raw};
+    const raw=dedupeDateRaw([a.getAttribute('aria-label'),a.getAttribute('title'),text(a)].filter(Boolean).join(' '));
+    if(raw){
+      const parsed=parseFacebookDate(raw);
+      return {iso:parsed.iso,raw,precision:parsed.precision};
+    }
   }
-  return {iso:null,raw:null};
+  return {iso:null,raw:null,precision:null};
 }
 
 function topArticles(){
   return [...document.querySelectorAll('[role="article"]')].filter(a=>!a.parentElement?.closest?.('[role="article"]'));
 }
 
-let running=false,timer=null,target=20,seen=new Set(),stats={seen:0,new:0,with_author:0,no_author:0},counts=0;
+let running=false,timer=null,target=20,seen=new Set(),stats={seen:0,new:0,with_author:0,no_author:0,with_date:0,no_date:0},counts=0;
 
 async function process(root){
   const meta=postMeta(root);
@@ -198,10 +290,11 @@ async function process(root){
   seen.add(key);stats.seen++;
   const {author,debug}=extractAuthor(root);
   const date=rawDate(root);
-  const row={key,facebook_post_id:meta.id,canonical_url:meta.url,text:body,author,author_debug:debug,posted_at:date.iso,date_raw:date.raw,seen_at:nowIso()};
+  const row={key,facebook_post_id:meta.id,canonical_url:meta.url,text:body,author,author_debug:debug,posted_at:date.iso,date_raw:date.raw,date_precision:date.precision,seen_at:nowIso()};
   const prev=(await getAll()).find(x=>x.key===key);
   if(!prev)stats.new++;
   if(author)stats.with_author++; else stats.no_author++;
+  if(date.iso)stats.with_date++; else stats.no_date++;
   await put(row);
   counts=await countAll();
 }
@@ -222,7 +315,7 @@ async function tick(){
 function start(){
   if(running)return;
   target=Math.max(1,Math.min(100,Number(input.value)||20));
-  running=true;render('Собираю авторов пассивно…');tick();
+  running=true;render('Пассивно проверяю авторов и даты…');tick();
 }
 function stop(msg='Остановлено'){
   running=false;
@@ -241,12 +334,12 @@ async function exportJson(){
 }
 async function clear(){
   if(!confirm('Очистить только данные AUTHOR TEST? Основной архив не затрагивается.'))return;
-  await clearAll();seen.clear();stats={seen:0,new:0,with_author:0,no_author:0};counts=0;render('AUTHOR TEST очищен');
+  await clearAll();seen.clear();stats={seen:0,new:0,with_author:0,no_author:0,with_date:0,no_date:0};counts=0;render('AUTHOR TEST очищен');
 }
 
 function render(msg=''){
   if(!status)return;
-  status.innerHTML=(msg?`<b>${esc(msg)}</b><br>`:'')+`Статус: <b>${running?'РАБОТАЕТ':'ОСТАНОВЛЕН'}</b><br>В тестовой базе: <b>${counts}</b> постов<br>Сейчас: просмотрено <b>${stats.seen}</b> · новых <b>${stats.new}</b><br>Автор найден: <b>${stats.with_author}</b> · не найден: <b>${stats.no_author}</b>`;
+  status.innerHTML=(msg?`<b>${esc(msg)}</b><br>`:'')+`Статус: <b>${running?'РАБОТАЕТ':'ОСТАНОВЛЕН'}</b><br>В тестовой базе: <b>${counts}</b> постов<br>Сейчас: просмотрено <b>${stats.seen}</b> · новых <b>${stats.new}</b><br>Автор найден: <b>${stats.with_author}</b> · не найден: <b>${stats.no_author}</b><br>Дата распознана: <b>${stats.with_date}</b> · не распознана: <b>${stats.no_date}</b>`;
 }
 
 const panel=document.createElement('div');
