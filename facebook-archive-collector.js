@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.6.0';
+const VERSION='pla-fb-archive-v2.6.1-passive-sync';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -501,25 +501,27 @@ async function saveCrawlState(extra={}){
 
 async function processArticle(article){
   if(!article?.isConnected)return null;
-  await expandPostText(article);
-  if(!article.isConnected)return null;
-  const expansion=await expandComments(article);
-  if(!article.isConnected)return null;
 
+  // PASSIVE MODE: never click or open Facebook controls in the group feed.
+  // Read only what Facebook has already rendered; enrichment will be a separate stage.
   const post=await buildPostRecord(article);
   if(seenSession.has(post.key))return null;
   seenSession.add(post.key);stats.posts_seen++;
   const comments=await buildComments(article,post);
   stats.comments_seen+=comments.length;
-  post.comments_complete=expansion.complete;
+  post.comments_complete=remainingExpandControls(article).length===0;
   if(!post.comments_complete)stats.comments_incomplete++;
+  post.raw_metadata={...(post.raw_metadata||{}),capture_mode:'passive',needs_enrichment:!post.comments_complete||/Ещё|See more|הצג עוד/i.test(post.text||'')};
+
   let media=mediaFromRoot(article,'post',post.key).map(m=>({...m,owner_key:post.key}));
   for(const c of comments){for(const m of mediaFromRoot(c._article,'comment',c.key))media.push({...m,owner_key:c.key});}
   stats.media_seen+=media.length;
+
   const result=await persistBundle(post,comments,media);
   if(result.postStatus==='new')stats.posts_new++;
   else if(result.postStatus==='updated')stats.posts_updated++;
   stats.comments_new+=result.commentsNew;stats.comments_updated+=result.commentsUpdated;stats.media_new+=result.mediaNew;
+
   lastSavedAt=nowIso();
   await saveCrawlState({checkpoint:{post_key:post.key,facebook_post_id:post.facebook_post_id,posted_at:post.posted_at,canonical_url:post.canonical_url,saved_at:lastSavedAt}});
   await refreshDbCounts();
@@ -621,7 +623,7 @@ function render(msg=''){
 }
 
 const panel=document.createElement('div');panel.id=UI_ID;panel.style='position:fixed;top:12px;right:12px;width:400px;max-height:92vh;overflow:auto;z-index:2147483647;background:#fff;color:#111;border:2px solid #1877f2;border-radius:12px;padding:14px;font:16px/1.4 Arial,sans-serif;box-shadow:0 4px 20px #0005';
-panel.innerHTML=`<b style="font-size:18px">Pumpkin Latte Archive</b><span id="pla-x" style="float:right;cursor:pointer;font-size:22px">✕</span><div style="margin-top:8px"><small>${VERSION}</small></div><label style="display:block;margin-top:10px">Остановиться после N новых постов<input id="pla-count" type="number" min="1" max="1000" value="100" style="display:block;width:100%;box-sizing:border-box;padding:9px;margin-top:4px;font-size:16px"></label><div style="display:flex;gap:7px;margin-top:10px"><button id="pla-start" style="flex:1;padding:10px;font-size:16px">▶ Старт</button><button id="pla-stop" style="flex:1;padding:10px;font-size:16px">■ Стоп</button></div><div style="display:flex;gap:7px;margin-top:7px"><button id="pla-export" style="flex:1;padding:9px">Экспорт JSON</button><button id="pla-test" style="flex:1;padding:9px">Самотест</button></div><button id="pla-sync" style="width:100%;padding:9px;margin-top:7px">Синхронизировать локальную базу → Supabase</button><button id="pla-check" style="width:100%;padding:8px;margin-top:7px">Проверить базу</button><button id="pla-clear" style="width:100%;padding:8px;margin-top:7px">Очистить ТЕСТОВЫЕ данные</button><div id="pla-status" style="margin-top:10px;line-height:1.5"></div><div style="margin-top:8px;font-size:12px;color:#555">Сначала данные сохраняются в IndexedDB, затем автоматически отправляются в приватный архив Supabase. Локальная копия остаётся страховкой.</div>`;
+panel.innerHTML=`<b style="font-size:18px">Pumpkin Latte Archive — PASSIVE + SYNC</b><span id="pla-x" style="float:right;cursor:pointer;font-size:22px">✕</span><div style="margin-top:8px"><small>${VERSION}</small></div><label style="display:block;margin-top:10px">Остановиться после N новых постов<input id="pla-count" type="number" min="1" max="1000" value="100" style="display:block;width:100%;box-sizing:border-box;padding:9px;margin-top:4px;font-size:16px"></label><div style="display:flex;gap:7px;margin-top:10px"><button id="pla-start" style="flex:1;padding:10px;font-size:16px">▶ Старт</button><button id="pla-stop" style="flex:1;padding:10px;font-size:16px">■ Стоп</button></div><div style="display:flex;gap:7px;margin-top:7px"><button id="pla-export" style="flex:1;padding:9px">Экспорт JSON</button><button id="pla-test" style="flex:1;padding:9px">Самотест</button></div><button id="pla-sync" style="width:100%;padding:9px;margin-top:7px">Синхронизировать локальную базу → Supabase</button><button id="pla-check" style="width:100%;padding:8px;margin-top:7px">Проверить базу</button><button id="pla-clear" style="width:100%;padding:8px;margin-top:7px">Очистить ТЕСТОВЫЕ данные</button><div id="pla-status" style="margin-top:10px;line-height:1.5"></div><div style="margin-top:8px;font-size:12px;color:#555">Сборщик не нажимает кнопки Facebook. Он сохраняет уже загруженные данные в IndexedDB и сразу синхронизирует их с приватным архивом Supabase.</div>`;
 document.body.appendChild(panel);
 const status=panel.querySelector('#pla-status'),countInput=panel.querySelector('#pla-count');
 panel.querySelector('#pla-start').onclick=start;panel.querySelector('#pla-stop').onclick=()=>stop();panel.querySelector('#pla-export').onclick=exportJson;panel.querySelector('#pla-sync').onclick=syncAllLocal;panel.querySelector('#pla-check').onclick=async()=>{await refreshDbCounts();render('База проверена')};panel.querySelector('#pla-clear').onclick=clearTestData;panel.querySelector('#pla-test').onclick=async()=>{const r=await selfTest();console.table(r.tests);console.log('PLA self-test',r)};panel.querySelector('#pla-x').onclick=()=>{stop();panel.style.display='none'};
