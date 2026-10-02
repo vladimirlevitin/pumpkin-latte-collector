@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.6.1-passive-sync';
+const VERSION='pla-fb-archive-v2.6.2-passive-sync-batch';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -394,18 +394,20 @@ async function markSyncStatus(postKey,statusValue,error=''){
   await putOne('posts',{...post,sync_status:statusValue,sync_error:error||null,synced_at:statusValue==='synced'?nowIso():(post.synced_at||null)});
 }
 
-function submitPayloadAndWait(payload){
+function submitPayloadsAndWait(payloads){
   return new Promise(resolve=>{
     const w=ensureSyncWindow();
     if(!w){resolve({ok:false,error:'popup_blocked'});return;}
+    const ack='ack-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
     const form=document.createElement('form');
     form.method='POST';form.action=INGEST_URL;form.target='PLA_SYNC';form.style.display='none';
-    for(const [name,value] of [['api_key',PUBLISHABLE_KEY],['mode','popup'],['payload',JSON.stringify(payload)]]){
+    for(const [name,value] of [['api_key',PUBLISHABLE_KEY],['mode','popup'],['ack',ack],['payloads',JSON.stringify(payloads)]]){
       const input=document.createElement('input');input.type='hidden';input.name=name;input.value=value;form.appendChild(input);
     }
     document.body.appendChild(form);
     try{form.submit();}catch(e){form.remove();resolve({ok:false,error:String(e?.message||e)});return;}
     form.remove();
+
     let checks=0;
     const timer=setInterval(()=>{
       checks++;
@@ -414,14 +416,17 @@ function submitPayloadAndWait(payload){
         const href=w.location.href||'';
         if(href.startsWith(location.origin+'/')){
           const u=new URL(href);
-          if(u.searchParams.get('pla_sync')===payload.batch_key){
+          if(u.searchParams.get('pla_sync')===ack){
             clearInterval(timer);
-            resolve({ok:u.searchParams.get('pla_ok')==='1',error:u.searchParams.get('pla_error')||''});
+            resolve({ok:u.searchParams.get('pla_ok')==='1',confirmed:true,saved:Number(u.searchParams.get('pla_saved')||0),error:u.searchParams.get('pla_error')||''});
             return;
           }
         }
       }catch{}
-      if(checks>=40){clearInterval(timer);resolve({ok:false,error:'sync_timeout'});}
+      if(checks>=12){
+        clearInterval(timer);
+        resolve({ok:true,confirmed:false,submitted:true});
+      }
     },500);
   });
 }
@@ -430,15 +435,29 @@ async function drainSyncQueue(){
   if(syncBusy)return;
   syncBusy=true;
   while(syncQueue.length){
-    const postKey=syncQueue.shift();
-    await markSyncStatus(postKey,'sending');
-    const payload=await buildSyncPayload(postKey);
-    if(!payload){await markSyncStatus(postKey,'local_only','no_facebook_post_id');continue;}
-    const result=await submitPayloadAndWait(payload);
-    if(result.ok){syncSubmitted++;await markSyncStatus(postKey,'synced');}
-    else{syncFailed++;await markSyncStatus(postKey,'pending',result.error||'sync_failed');}
-    render(result.ok?'Supabase: сохранено':'Supabase: повторим позже');
-    await sleep(250);
+    const keys=syncQueue.splice(0,20);
+    const payloads=[];
+    const validKeys=[];
+    for(const postKey of keys){
+      await markSyncStatus(postKey,'sending');
+      const payload=await buildSyncPayload(postKey);
+      if(payload){payloads.push(payload);validKeys.push(postKey);}
+      else await markSyncStatus(postKey,'local_only','no_facebook_post_id');
+    }
+    if(!payloads.length)continue;
+
+    const result=await submitPayloadsAndWait(payloads);
+    if(result.ok){
+      syncSubmitted+=validKeys.length;
+      for(const postKey of validKeys){
+        await markSyncStatus(postKey,result.confirmed?'synced':'submitted',result.confirmed?'':'awaiting_confirmation');
+      }
+    }else{
+      syncFailed+=validKeys.length;
+      for(const postKey of validKeys)await markSyncStatus(postKey,'pending',result.error||'sync_failed');
+    }
+    render(result.ok?(result.confirmed?'Supabase: пакет сохранён':'Supabase: пакет отправлен'):'Supabase: повторим пакет позже');
+    await sleep(400);
   }
   syncBusy=false;
   render();
