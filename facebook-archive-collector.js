@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.6.5-author-dates';
+const VERSION='pla-fb-archive-v2.6.6-single-sync-window';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -484,16 +484,29 @@ function getCollectorId(){
 function ensureSyncWindow(){
   try{
     if(syncWin&&!syncWin.closed)return syncWin;
-    syncWin=window.open('about:blank','PLA_SYNC','width=420,height=300');
+    // Open exactly one visible helper window from a direct user action.
+    // The helper itself never navigates cross-origin; each upload goes through
+    // a hidden iframe inside it, so browsers cannot turn every batch into a
+    // separate popup when window.name is reset on cross-site navigation.
+    syncWin=window.open('about:blank','PLA_SYNC_HOST','width=420,height=300');
     if(syncWin){
       try{
         syncWin.document.open();
-        syncWin.document.write('<meta charset="utf-8"><title>Pumpkin Sync</title><body style="font:16px Arial;padding:18px"><b>Pumpkin → Supabase</b><p>Окно синхронизации. Не закрывайте его, пока идёт сбор.</p>');
+        syncWin.document.write('<!doctype html><meta charset="utf-8"><title>Pumpkin Sync</title><body style="font:16px Arial;padding:18px"><b>Pumpkin → Supabase</b><p id="pla-sync-status">Окно синхронизации. Не закрывайте его, пока идёт сбор.</p><div id="pla-sync-frames" style="display:none"></div></body>');
         syncWin.document.close();
       }catch{}
     }
     return syncWin;
   }catch{return null;}
+}
+
+function syncWindowStatus(message){
+  try{
+    if(syncWin&&!syncWin.closed){
+      const e=syncWin.document.getElementById('pla-sync-status');
+      if(e)e.textContent=message;
+    }
+  }catch{}
 }
 
 async function buildSyncPayload(postKey){
@@ -529,36 +542,74 @@ async function markSyncStatus(postKey,statusValue,error=''){
 
 function submitPayloadsAndWait(payloads){
   return new Promise(resolve=>{
-    const w=ensureSyncWindow();
-    if(!w){resolve({ok:false,error:'popup_blocked'});return;}
-    const ack='ack-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
-    const form=document.createElement('form');
-    form.method='POST';form.action=INGEST_URL;form.target='PLA_SYNC';form.style.display='none';
-    for(const [name,value] of [['api_key',PUBLISHABLE_KEY],['mode','popup'],['ack',ack],['payloads',JSON.stringify(payloads)]]){
-      const input=document.createElement('input');input.type='hidden';input.name=name;input.value=value;form.appendChild(input);
-    }
-    document.body.appendChild(form);
-    try{form.submit();}catch(e){form.remove();resolve({ok:false,error:String(e?.message||e)});return;}
-    form.remove();
+    // Do not call window.open here. If the one helper window was closed,
+    // wait for the user to press Sync/Start again instead of spawning popups.
+    const w=syncWin&&!syncWin.closed?syncWin:null;
+    if(!w){resolve({ok:false,error:'sync_window_closed'});return;}
 
-    let checks=0;
+    const ack='ack-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
+    const frameName='PLA_SYNC_FRAME_'+ack.replace(/[^A-Za-z0-9_]/g,'_');
+    let iframe,form;
+    try{
+      iframe=w.document.createElement('iframe');
+      iframe.name=frameName;
+      iframe.style.display='none';
+      (w.document.getElementById('pla-sync-frames')||w.document.body).appendChild(iframe);
+
+      form=w.document.createElement('form');
+      form.method='POST';
+      form.action=INGEST_URL;
+      form.target=frameName;
+      form.style.display='none';
+      for(const [name,value] of [['api_key',PUBLISHABLE_KEY],['mode','popup'],['ack',ack],['payloads',JSON.stringify(payloads)]]){
+        const input=w.document.createElement('input');
+        input.type='hidden';input.name=name;input.value=value;form.appendChild(input);
+      }
+      w.document.body.appendChild(form);
+      syncWindowStatus(`Отправляю пакет: ${payloads.length} постов…`);
+      form.submit();
+      form.remove();
+    }catch(e){
+      try{form?.remove();iframe?.remove();}catch{}
+      resolve({ok:false,error:String(e?.message||e)});
+      return;
+    }
+
+    let checks=0,done=false;
+    const finish=result=>{
+      if(done)return;
+      done=true;
+      try{iframe?.remove();}catch{}
+      resolve(result);
+    };
     const timer=setInterval(()=>{
       checks++;
+      if(!syncWin||syncWin.closed){
+        clearInterval(timer);
+        finish({ok:false,error:'sync_window_closed'});
+        return;
+      }
       try{
-        if(w.closed){clearInterval(timer);resolve({ok:false,error:'popup_closed'});return;}
-        const href=w.location.href||'';
+        const href=iframe?.contentWindow?.location?.href||'';
         if(href.startsWith(location.origin+'/')){
           const u=new URL(href);
           if(u.searchParams.get('pla_sync')===ack){
             clearInterval(timer);
-            resolve({ok:u.searchParams.get('pla_ok')==='1',confirmed:true,saved:Number(u.searchParams.get('pla_saved')||0),error:u.searchParams.get('pla_error')||''});
+            const ok=u.searchParams.get('pla_ok')==='1';
+            const saved=Number(u.searchParams.get('pla_saved')||0);
+            syncWindowStatus(ok?`Сохранено в Supabase: ${saved}`:`Ошибка синхронизации: ${u.searchParams.get('pla_error')||'unknown'}`);
+            finish({ok,confirmed:true,saved,error:u.searchParams.get('pla_error')||''});
             return;
           }
         }
       }catch{}
-      if(checks>=12){
+      if(checks>=40){
         clearInterval(timer);
-        resolve({ok:true,confirmed:false,submitted:true});
+        // The request may have reached Supabase even if the final Facebook
+        // acknowledgement page was blocked inside the iframe. Mark it as
+        // submitted, not synced; a later retry is safe because batch_key is upserted.
+        syncWindowStatus('Пакет отправлен; подтверждение не получено');
+        finish({ok:true,confirmed:false,submitted:true});
       }
     },500);
   });
@@ -611,7 +662,7 @@ async function syncAllLocal(){
   const keys=[...new Set(posts.filter(p=>syncablePostKey(p.key)).map(p=>p.key))];
   syncQueue=[...keys];
   syncQueuedKeys=new Set(keys);
-  render(`Синхронизация всей локальной базы: ${keys.length} постов`);
+  syncWindowStatus(`Синхронизация всей локальной базы: ${keys.length} постов`);render(`Синхронизация всей локальной базы: ${keys.length} постов`);
   void drainSyncQueue();
 }
 
