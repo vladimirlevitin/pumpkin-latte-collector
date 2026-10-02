@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.6.3-passive-sync-all';
+const VERSION='pla-fb-archive-v2.6.4-sync-fallbacks';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -39,6 +39,7 @@ const text=e=>norm(e?.innerText||e?.textContent||'');
 const visible=e=>{if(!e?.getBoundingClientRect)return false;const r=e.getBoundingClientRect();return r.width>0&&r.height>0};
 const esc=s=>norm(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const nowIso=()=>new Date().toISOString();
+const syncablePostKey=k=>/^fb:pumpkinlatte:(?:post:[0-9]+|posthash:[a-f0-9]{64})$/.test(String(k||''));
 
 async function sha256(value){
   const bytes=new TextEncoder().encode(String(value||''));
@@ -367,7 +368,9 @@ function ensureSyncWindow(){
 
 async function buildSyncPayload(postKey){
   const post=await getOne('posts',postKey);
-  if(!post?.facebook_post_id||!/^fb:pumpkinlatte:post:[0-9]+$/.test(post.key))return null;
+  if(!post||!syncablePostKey(post.key))return null;
+  const canonical=/^fb:pumpkinlatte:post:[0-9]+$/.test(post.key);
+  if(canonical&&!post.facebook_post_id)return null;
   const [allComments,allMedia,allAuthors]=await Promise.all([getAll('comments'),getAll('media'),getAll('authors')]);
   const comments=allComments.filter(c=>c.post_key===postKey);
   const commentKeys=new Set(comments.map(c=>c.key));
@@ -379,9 +382,9 @@ async function buildSyncPayload(postKey){
     schema_version:SCHEMA_VERSION,
     collector_id:getCollectorId(),
     batch_key:post.key,
-    facebook_post_id:String(post.facebook_post_id),
+    facebook_post_id:canonical?String(post.facebook_post_id):null,
     group:{platform:'facebook',identifier:'pumpkinlatte',url:'https://www.facebook.com/groups/pumpkinlatte/'},
-    posts:[post],
+    posts:[{...post,facebook_post_id:canonical?String(post.facebook_post_id):null}],
     comments,
     media,
     authors
@@ -464,7 +467,7 @@ async function drainSyncQueue(){
 }
 
 function queueSyncPost(postKey,force=false){
-  if(!/^fb:pumpkinlatte:post:[0-9]+$/.test(postKey||''))return;
+  if(!syncablePostKey(postKey))return;
   if(!force&&syncQueuedKeys.has(postKey))return;
   syncQueuedKeys.add(postKey);
   syncQueue.push(postKey);
@@ -475,7 +478,7 @@ async function syncAllLocal(){
   ensureSyncWindow();
   if(syncBusy){render('Синхронизация уже идёт');return;}
   const posts=await getAll('posts');
-  const keys=[...new Set(posts.filter(p=>/^fb:pumpkinlatte:post:[0-9]+$/.test(p.key||'')).map(p=>p.key))];
+  const keys=[...new Set(posts.filter(p=>syncablePostKey(p.key)).map(p=>p.key))];
   syncQueue=[...keys];
   syncQueuedKeys=new Set(keys);
   render(`Синхронизация всей локальной базы: ${keys.length} постов`);
