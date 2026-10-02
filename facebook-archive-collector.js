@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.1.0';
+const VERSION='pla-fb-archive-v2.2.0';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -220,7 +220,7 @@ async function buildComments(postArticle,postRecord){
   return rows;
 }
 
-function isClickableControl(el){return el&&visible(el)&&['BUTTON','A','DIV','SPAN'].includes(el.tagName);}
+function isClickableControl(el){return el&&visible(el)&&(el.tagName==='BUTTON'||el.getAttribute?.('role')==='button');}
 function clickSafe(el){try{el.click();return true}catch{return false}}
 
 async function expandPostText(article){
@@ -243,7 +243,7 @@ async function tryAllComments(article){
 }
 
 function remainingExpandControls(article){
-  return [...article.querySelectorAll('div[role="button"],span[role="button"],button,a')].filter(el=>{const s=text(el);return s&&s.length<180&&RX.commentExpand.test(s)&&visible(el)});
+  return [...article.querySelectorAll('div[role="button"],span[role="button"],button')].filter(el=>{const s=text(el);return s&&s.length<180&&RX.commentExpand.test(s)&&visible(el)});
 }
 
 async function expandComments(article){
@@ -323,7 +323,7 @@ async function persistBundle(post,comments,media){
 async function addError(data){try{await reqPromise((await txStore('errors','readwrite')).add({created_at:nowIso(),...data}))}catch{} }
 
 const stats={posts_seen:0,posts_new:0,posts_updated:0,comments_seen:0,comments_new:0,comments_updated:0,media_seen:0,media_new:0,errors:0,comments_incomplete:0};
-let running=false,timer=null,targetNew=100,seenSession=new Set();
+let running=false,timer=null,targetNew=100,seenSession=new Set(),emptyScans=0;
 
 async function saveCrawlState(extra={}){
   const state={key:STATE_KEY,collector_version:VERSION,schema_version:SCHEMA_VERSION,group:GROUP_PATH,page_url:location.href,updated_at:nowIso(),stats:{...stats},...extra};
@@ -355,21 +355,35 @@ async function processArticle(article){
 }
 
 async function scanVisible(){
-  const arts=topArticles().filter(a=>{const r=a.getBoundingClientRect();return r.bottom>-300&&r.top<innerHeight*2.3&&r.height>120});
-  for(const a of arts){if(!running)break;try{await processArticle(a)}catch(err){stats.errors++;await addError({stage:'processArticle',message:String(err?.stack||err)});}}
+  const arts=topArticles().filter(a=>{const r=a.getBoundingClientRect();return r.bottom>-300&&r.top<innerHeight*2.0&&r.height>120});
+  for(const a of arts){
+    if(!running)break;
+    if(!a.isConnected)continue;
+    try{await processArticle(a)}catch(err){stats.errors++;await addError({stage:'processArticle',message:String(err?.stack||err)});}
+  }
   render();
+  return arts.length;
 }
 
 async function tick(){
   if(!running)return;
-  await scanVisible();
+  const found=await scanVisible();
   if(stats.posts_new>=targetNew){stop(`✓ Набрано ${targetNew} новых постов`);return;}
-  scrollBy(0,Math.max(innerHeight*.82,600));
-  timer=setTimeout(tick,750);
+  if(!found){
+    emptyScans++;
+    if(emptyScans>=3){stop('Пауза: Facebook не загрузил следующие посты. Данные сохранены.');return;}
+    timer=setTimeout(tick,1600);
+    return;
+  }
+  emptyScans=0;
+  scrollBy(0,Math.max(innerHeight*.55,450));
+  timer=setTimeout(tick,1200);
 }
 
 function start(){
+  if(running)return;
   targetNew=Math.max(1,Math.min(1000,Number(countInput.value)||100));
+  emptyScans=0;
   running=true;render('Собираю…');tick();
 }
 function stop(msg='Остановлено'){
