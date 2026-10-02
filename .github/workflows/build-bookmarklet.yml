@@ -1,0 +1,36 @@
+name: Build bookmarklet
+
+on:
+  push:
+    paths:
+      - "facebook-archive-collector.js"
+      - ".github/workflows/build-bookmarklet.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Minify collector
+        run: |
+          npx --yes terser facebook-archive-collector.js --compress passes=2 --mangle --ecma 2020 -o collector.min.js
+          printf 'javascript:' > BOOKMARKLET.txt
+          cat collector.min.js >> BOOKMARKLET.txt
+          echo "source_bytes=$(wc -c < facebook-archive-collector.js)"
+          echo "bookmarklet_bytes=$(wc -c < BOOKMARKLET.txt)"
+      - name: Commit generated bookmarklet
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add BOOKMARKLET.txt collector.min.js
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Build minified self-contained bookmarklet [skip ci]"
+          git push
