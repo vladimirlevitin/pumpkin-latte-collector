@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-author-test-v2.6.6';
+const VERSION='pla-author-test-v2.6.7';
 const UI_ID='pla-author-test-panel';
 const DB_NAME='pumpkin_latte_author_test';
 const DB_VERSION=1;
@@ -71,18 +71,39 @@ function stableProfile(href){
     const u=new URL(href,location.origin);
     const host=u.hostname.toLowerCase();
     if(!['facebook.com','www.facebook.com','m.facebook.com'].includes(host))return null;
-    const path=u.pathname.replace(/^\/+|\/+$/g,'');
-    if(!path)return null;
-    const groupUser=path.match(/^groups\/\d+\/user\/(\d+)$/i);
-    if(groupUser)return {id:groupUser[1],url:`https://www.facebook.com/profile.php?id=${groupUser[1]}`};
-    const first=path.split('/')[0].toLowerCase();
-    const blocked=new Set(['l.php','groups','posts','permalink','photo','photos','watch','reel','reels','story.php','stories','events','marketplace','gaming','help','login','share','sharer.php','plugins']);
+
+    const parts=u.pathname.split('/').filter(Boolean);
+    if(!parts.length)return null;
+
+    // Facebook group member links are the normal author links inside group posts.
+    // Accept them before the generic "groups" block and normalize to profile.php?id=...
+    if(
+      parts.length>=4 &&
+      parts[0].toLowerCase()==='groups' &&
+      parts[2].toLowerCase()==='user' &&
+      /^\d+$/.test(parts[3])
+    ){
+      const id=parts[3];
+      return {id,url:`https://www.facebook.com/profile.php?id=${id}`};
+    }
+
+    const first=parts[0].toLowerCase();
+    const blocked=new Set([
+      'l.php','groups','posts','permalink','photo','photos','watch','reel','reels',
+      'story.php','stories','events','marketplace','gaming','help','login','share',
+      'sharer.php','plugins','pages','places','page','people','public','hashtag',
+      'search','notifications','messages','friends','settings','privacy','bookmarks'
+    ]);
     if(blocked.has(first))return null;
+
     if(first==='profile.php'){
       const id=u.searchParams.get('id');
       return /^\d+$/.test(id||'')?{id,url:`https://www.facebook.com/profile.php?id=${id}`}:null;
     }
-    const id=path.split('/')[0];
+
+    // For username profiles accept only a single clean path segment.
+    if(parts.length!==1)return null;
+    const id=parts[0];
     if(!/^[A-Za-z0-9._-]{2,100}$/.test(id))return null;
     return {id,url:`https://www.facebook.com/${id}`};
   }catch{return null;}
