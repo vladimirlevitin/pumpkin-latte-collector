@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-author-test-v2.6.5';
+const VERSION='pla-author-test-v2.6.6';
 const UI_ID='pla-author-test-panel';
 const DB_NAME='pumpkin_latte_author_test';
 const DB_VERSION=1;
@@ -73,6 +73,8 @@ function stableProfile(href){
     if(!['facebook.com','www.facebook.com','m.facebook.com'].includes(host))return null;
     const path=u.pathname.replace(/^\/+|\/+$/g,'');
     if(!path)return null;
+    const groupUser=path.match(/^groups\/\d+\/user\/(\d+)$/i);
+    if(groupUser)return {id:groupUser[1],url:`https://www.facebook.com/profile.php?id=${groupUser[1]}`};
     const first=path.split('/')[0].toLowerCase();
     const blocked=new Set(['l.php','groups','posts','permalink','photo','photos','watch','reel','reels','story.php','stories','events','marketplace','gaming','help','login','share','sharer.php','plugins']);
     if(blocked.has(first))return null;
