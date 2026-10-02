@@ -1,0 +1,37 @@
+name: Build author test bookmarklet
+
+on:
+  push:
+    paths:
+      - "author-test-collector.js"
+      - ".github/workflows/build-author-test-bookmarklet.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Minify author test
+        run: |
+          npx --yes terser author-test-collector.js --compress passes=2 --mangle --ecma 2020 -o author-test.min.js
+          printf 'javascript:' > AUTHOR_TEST_BOOKMARKLET.txt
+          cat author-test.min.js >> AUTHOR_TEST_BOOKMARKLET.txt
+          echo "source_bytes=$(wc -c < author-test-collector.js)"
+          echo "bookmarklet_bytes=$(wc -c < AUTHOR_TEST_BOOKMARKLET.txt)"
+      - name: Commit generated author test bookmarklet
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add AUTHOR_TEST_BOOKMARKLET.txt author-test.min.js
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Build author test bookmarklet [skip ci]"
+          git push
