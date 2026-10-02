@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.3.0';
+const VERSION='pla-fb-archive-v2.4.0';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -11,6 +11,9 @@ const STATE_KEY=`crawl:${GROUP_PATH}`;
 const MAX_EXPAND_CYCLES=20;
 const MAX_CLICKS_PER_CYCLE=8;
 const ACTION_DELAY_MS=320;
+const HEARTBEAT_URL='https://ltznpjfnkpydautbsrej.supabase.co/rest/v1/collector_heartbeats';
+const HEARTBEAT_KEY='sb_publishable_tHMD6sI6e5BS9WOqFAeG1A_jFs6ta6d';
+const COLLECTOR_ID_KEY='pla_collector_id';
 
 if(window.__PLA_FB_ARCHIVE?.panel){
   const p=window.__PLA_FB_ARCHIVE.panel;
@@ -295,6 +298,45 @@ async function refreshDbCounts(){
   return dbCounts;
 }
 
+function getCollectorId(){
+  let id=localStorage.getItem(COLLECTOR_ID_KEY);
+  if(!id){
+    id='pla-'+(crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).slice(2)+Date.now().toString(36));
+    localStorage.setItem(COLLECTOR_ID_KEY,id);
+  }
+  return id;
+}
+
+async function sendHeartbeat(statusOverride){
+  try{
+    await refreshDbCounts();
+    const payload={
+      collector_id:getCollectorId(),
+      group_slug:GROUP_PATH,
+      collector_version:VERSION,
+      status:statusOverride||(running?'running':'stopped'),
+      posts:dbCounts.posts,
+      comments:dbCounts.comments,
+      media:dbCounts.media,
+      authors:dbCounts.authors,
+      errors:dbCounts.errors,
+      last_saved_at:lastSavedAt,
+      client_at:nowIso()
+    };
+    await fetch(HEARTBEAT_URL,{
+      method:'POST',
+      mode:'cors',
+      credentials:'omit',
+      headers:{
+        apikey:HEARTBEAT_KEY,
+        'Content-Type':'application/json',
+        Prefer:'return=minimal'
+      },
+      body:JSON.stringify(payload)
+    });
+  }catch{}
+}
+
 async function persistAuthor(author){
   if(!author?.display_name&&!author?.facebook_author_id)return null;
   const basis=author.facebook_author_id||`${GROUP_PATH}|${author.display_name}|${author.profile_url||''}`;
@@ -326,7 +368,7 @@ async function persistBundle(post,comments,media){
 async function addError(data){try{await reqPromise((await txStore('errors','readwrite')).add({created_at:nowIso(),...data}))}catch{} }
 
 const stats={posts_seen:0,posts_new:0,posts_updated:0,comments_seen:0,comments_new:0,comments_updated:0,media_seen:0,media_new:0,errors:0,comments_incomplete:0};
-let running=false,timer=null,targetNew=100,seenSession=new Set(),emptyScans=0,watchdog=null;
+let running=false,timer=null,targetNew=100,seenSession=new Set(),emptyScans=0,watchdog=null,heartbeatTimer=null;
 
 async function saveCrawlState(extra={}){
   const state={key:STATE_KEY,collector_version:VERSION,schema_version:SCHEMA_VERSION,group:GROUP_PATH,page_url:location.href,updated_at:nowIso(),stats:{...stats},...extra};
@@ -387,10 +429,19 @@ function start(){
   if(running)return;
   targetNew=Math.max(1,Math.min(1000,Number(countInput.value)||100));
   emptyScans=0;
-  running=true;render('Собираю…');tick();
+  running=true;
+  render('Собираю…');
+  sendHeartbeat('running');
+  if(!heartbeatTimer)heartbeatTimer=setInterval(()=>sendHeartbeat(),10000);
+  tick();
 }
 function stop(msg='Остановлено'){
-  running=false;if(timer)clearTimeout(timer);timer=null;saveCrawlState({status:'stopped'}).catch(()=>{});render(msg);
+  running=false;
+  if(timer)clearTimeout(timer);timer=null;
+  if(heartbeatTimer)clearInterval(heartbeatTimer);heartbeatTimer=null;
+  saveCrawlState({status:'stopped'}).catch(()=>{});
+  render(msg);
+  sendHeartbeat('stopped');
 }
 
 async function exportJson(){
@@ -447,5 +498,5 @@ watchdog=setInterval(async()=>{
   if(!panel.isConnected&&document.body)document.body.appendChild(panel);
   if(running){try{await refreshDbCounts();}catch{};render('Собираю…');}
 },2000);
-refreshDbCounts().then(()=>render('Готов к запуску')).catch(()=>render('Готов к запуску'));
+refreshDbCounts().then(()=>{render('Готов к запуску');sendHeartbeat('ready')}).catch(()=>render('Готов к запуску'));
 })();
