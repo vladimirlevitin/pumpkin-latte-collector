@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.8.0-dialog-enrichment';
+const VERSION='pla-fb-archive-v2.8.1-incremental-comments';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -462,9 +462,14 @@ async function expandPostText(article){
 }
 
 async function tryAllComments(article){
-  const candidates=[...article.querySelectorAll('div[role="button"],span[role="button"],button')].filter(el=>RX.relevantComments.test(text(el)));
+  const controls=[...article.querySelectorAll('div[role="button"],span[role="button"],button')].filter(visible);
+  // If Facebook already shows "All comments / Все комментарии", do not open the menu.
+  if(controls.some(el=>RX.allComments.test(text(el))))return true;
+
+  const candidates=controls.filter(el=>RX.relevantComments.test(text(el)));
   for(const el of candidates.slice(0,1)){
-    if(!isClickableControl(el))continue;clickSafe(el);await sleep(ACTION_DELAY_MS);
+    if(!isClickableControl(el))continue;
+    clickSafe(el);await sleep(ACTION_DELAY_MS);
     const options=[...document.querySelectorAll('[role="menuitem"],[role="option"],div[role="button"],span[role="button"]')].filter(x=>RX.allComments.test(text(x))&&visible(x));
     if(options[0]){clickSafe(options[0]);await sleep(ACTION_DELAY_MS);return true;}
   }
@@ -822,11 +827,52 @@ function scrollContainerFor(article,root){
 function scrollComments(container){
   try{
     if(container===document.scrollingElement||container===document.documentElement||container===document.body){
+      const before=window.scrollY;
+      const max=Math.max(0,(document.scrollingElement?.scrollHeight||document.documentElement.scrollHeight)-innerHeight);
       window.scrollBy(0,Math.max(500,innerHeight*.58));
-    }else{
-      container.scrollTop+=Math.max(450,container.clientHeight*.62);
+      const after=window.scrollY;
+      return {moved:after>before+1,atEnd:after>=max-30,before,after,max};
     }
-  }catch{}
+    const before=container.scrollTop;
+    const max=Math.max(0,container.scrollHeight-container.clientHeight);
+    container.scrollTop=Math.min(max,before+Math.max(450,container.clientHeight*.62));
+    const after=container.scrollTop;
+    return {moved:after>before+1,atEnd:after>=max-30,before,after,max};
+  }catch{return {moved:false,atEnd:false,before:0,after:0,max:0}}
+}
+
+function displayedCommentCount(root){
+  let best=null;
+  const els=[...root.querySelectorAll?.('[aria-label],[title],button,[role="button"]')||[]];
+  for(const el of els){
+    const raw=[el.getAttribute?.('aria-label'),el.getAttribute?.('title'),text(el)].filter(Boolean).join(' ');
+    if(!raw||raw.length>180)continue;
+    let m=raw.match(/(\d{1,5})\s*(?:комментар(?:ий|ия|иев)?|comments?|תגובות)/i);
+    if(!m)m=raw.match(/(?:комментар(?:ий|ия|иев)?|comments?|תגובות)\s*(\d{1,5})/i);
+    if(m){
+      const n=Number(m[1]);
+      if(Number.isFinite(n)&&n>=0&&(best===null||n>best))best=n;
+    }
+  }
+  return best;
+}
+
+function dateFromPostHeaderText(root){
+  const rr=root.getBoundingClientRect?.()||{top:0,height:1000};
+  const maxTop=rr.top+Math.min(280,Math.max(180,rr.height*.16));
+  for(const el of root.querySelectorAll?.('a,span')||[]){
+    const nearest=el.closest?.('[role="article"]');
+    if(nearest&&nearest!==root)continue;
+    const r=el.getBoundingClientRect?.()||{top:0};
+    if(r.top<rr.top-20||r.top>maxTop)continue;
+    const raw=norm([el.getAttribute?.('aria-label'),el.getAttribute?.('title'),text(el)].filter(Boolean).join(' '));
+    if(!raw||raw.length>120)continue;
+    const direct=parseDate(raw);
+    if(direct&&!isNaN(direct))return direct;
+    const m=raw.match(/\b\d{1,2}\s+[А-Яа-яЁё]+(?:\s+\d{4})?(?:\s+в\s+\d{1,2}:\d{2})?\b/i);
+    if(m){const d=parseDate(m[0]);if(d&&!isNaN(d))return d;}
+  }
+  return null;
 }
 
 async function enrichCurrentPost(){
@@ -837,8 +883,6 @@ async function enrichCurrentPost(){
     return {ok:false,error:'not_single_post_page'};
   }
 
-  // Open the one helper window from the direct user click; no data is sent until
-  // all identity guards below pass.
   ensureSyncWindow();
 
   let selected=currentPostSelection(pagePostId);
@@ -856,8 +900,38 @@ async function enrichCurrentPost(){
   const beforePrefix=norm(beforeText).slice(0,120);
   const beforeAuthor=extractAuthor(article)?.display_name||'';
   const initialNested=[...article.querySelectorAll?.('[role="article"]')||[]].filter(x=>x!==article).length;
+  const expectedComments=displayedCommentCount(article);
 
-  render('Обогащение: выбран открытый пост · ссылок '+selected.exact+' · комментариев в DOM '+initialNested);
+  const postKey=`fb:${GROUP_PATH}:post:${pagePostId}`;
+  const existingLocalComments=(await getAll('comments')).filter(x=>x.post_key===postKey);
+  const existingLocalCount=existingLocalComments.length;
+
+  // Facebook virtualizes long discussions: older DOM nodes can disappear while
+  // new ones are loaded. Keep a cumulative map so comments seen on earlier scroll
+  // positions are not lost.
+  const commentMap=new Map(existingLocalComments.map(x=>[x.facebook_comment_id||x.key,{...x}]));
+  let snapshots=0;
+
+  const collectSnapshot=async()=>{
+    selected=currentPostSelection(pagePostId);
+    if(!selected)return {ok:false,count:commentMap.size};
+    article=selected.article;
+    const seed=await buildPostRecord(article);
+    seed.facebook_post_id=String(pagePostId);
+    seed.key=postKey;
+    seed.canonical_url=`https://www.facebook.com/groups/${GROUP_PATH}/posts/${pagePostId}/`;
+    const rows=await buildComments(article,seed,article);
+    for(const row of rows){
+      const k=row.facebook_comment_id||row.key;
+      const prev=commentMap.get(k);
+      if(!prev||String(row.text||'').length>=String(prev.text||'').length)commentMap.set(k,row);
+    }
+    snapshots++;
+    return {ok:true,count:commentMap.size,current:rows.length};
+  };
+
+  await collectSnapshot();
+  render('Обогащение: выбран пост · комментариев накоплено '+commentMap.size+(expectedComments!==null?' из '+expectedComments:''));
 
   let textClicks=0;
   for(let i=0;i<3;i++){
@@ -871,13 +945,17 @@ async function enrichCurrentPost(){
     await sleep(350);
   }
 
-  render('Обогащение: включаю все комментарии внутри открытого поста…');
+  render('Обогащение: проверяю режим «Все комментарии»…');
   const allCommentsSelected=await tryAllComments(article);
   await sleep(900);
+  await collectSnapshot();
 
-  render('Обогащение: раскрываю и подгружаю комментарии внутри открытого поста…');
-  let totalClicks=0,stable=0,previousCount=-1;
-  for(let cycle=0;cycle<18;cycle++){
+  render('Обогащение: догружаю комментарии, сохраняя каждую порцию…');
+  let totalClicks=0,stableUnique=0,previousUnique=commentMap.size,lastScroll={moved:true,atEnd:false};
+  let cycles=0;
+
+  for(let cycle=0;cycle<28;cycle++){
+    cycles=cycle+1;
     if(String(currentPagePostId()||'')!==String(pagePostId)){
       render('Обогащение остановлено: Facebook сменил открытый пост. Ничего не сохранено.');
       return {ok:false,error:'route_changed_during_enrichment'};
@@ -890,18 +968,27 @@ async function enrichCurrentPost(){
     }
     article=selected.article;
 
-    const ex=await expandComments(article,2,8);
+    await collectSnapshot();
+    if(expectedComments!==null&&commentMap.size>=expectedComments)break;
+
+    const ex=await expandComments(article,2,10);
     totalClicks+=ex.totalClicks||0;
-    const roleCount=[...(article.querySelectorAll?.('[role="article"]')||[])].filter(x=>x!==article).length;
-    const linkCount=[...(article.querySelectorAll?.('a[href]')||[])].filter(a=>/[?&](?:comment_id|reply_comment_id)=\d+/.test(a.href||a.getAttribute('href')||'')).length;
-    const count=Math.max(roleCount,linkCount);
+    if(ex.totalClicks)await sleep(550);
+    await collectSnapshot();
+    if(expectedComments!==null&&commentMap.size>=expectedComments)break;
 
-    if(count===previousCount)stable++;else stable=0;
-    previousCount=count;
-
-    if(stable>=3&&!(ex.totalClicks>0))break;
-    scrollComments(scrollContainer);
+    lastScroll=scrollComments(scrollContainer);
     await sleep(900);
+    await collectSnapshot();
+
+    if(commentMap.size===previousUnique)stableUnique++;else stableUnique=0;
+    previousUnique=commentMap.size;
+
+    render('Обогащение: накоплено комментариев '+commentMap.size+(expectedComments!==null?' из '+expectedComments:'')+' · цикл '+cycles);
+
+    if(expectedComments!==null&&commentMap.size>=expectedComments)break;
+    if(stableUnique>=5&&!(ex.totalClicks>0)&&lastScroll.atEnd)break;
+    if(stableUnique>=8&&!(ex.totalClicks>0))break;
   }
 
   if(String(currentPagePostId()||'')!==String(pagePostId)){
@@ -917,10 +1004,14 @@ async function enrichCurrentPost(){
   article=selected.article;
 
   const post=await buildPostRecord(article);
-  // Identity comes from the URL we explicitly opened, not from a descendant comment link.
   post.facebook_post_id=String(pagePostId);
-  post.key=`fb:${GROUP_PATH}:post:${pagePostId}`;
+  post.key=postKey;
   post.canonical_url=`https://www.facebook.com/groups/${GROUP_PATH}/posts/${pagePostId}/`;
+
+  if(!post.posted_at){
+    const d=dateFromPostHeaderText(article);
+    if(d&&!isNaN(d))post.posted_at=d.toISOString();
+  }
 
   const afterPrefix=norm(post.text||'').slice(0,120);
   const samePostText=beforePrefix.length>=30&&afterPrefix.length>=30&&
@@ -935,27 +1026,38 @@ async function enrichCurrentPost(){
     return {ok:false,error:'identity_guard_failed',samePostText,sameAuthor,exactNow,nestedNow};
   }
 
-  const comments=await buildComments(article,post,article);
+  await collectSnapshot();
+  const comments=[...commentMap.values()];
   if(initialNested>0&&comments.length===0){
     render('Обогащение остановлено защитой: комментарии были видны, но не распознаны. Ничего не сохранено.');
     return {ok:false,error:'comments_guard_failed',initialNested};
+  }
+  if(comments.length<existingLocalCount){
+    render('Обогащение остановлено защитой: новых данных меньше уже сохранённых. Ничего не перезаписано.');
+    return {ok:false,error:'comment_regression_guard',existingLocalCount,newCount:comments.length};
   }
 
   const remaining=remainingExpandControls(article).length;
   const textStillTruncated=/(?:\.\.\.|…)[\s\u00a0]*(?:Ещё|See more|הצג עוד)[\s\u00a0]*$/i.test(post.text||'');
   const missingAuthor=!post.author?.display_name;
   const missingDate=!post.posted_at;
-  post.comments_complete=remaining===0;
+  const reachedExpected=expectedComments===null||comments.length>=expectedComments;
+  post.comments_complete=remaining===0&&reachedExpected;
   post.raw_metadata={
     ...(post.raw_metadata||{}),
-    capture_mode:'dialog_enrichment',
+    capture_mode:'dialog_enrichment_incremental',
     needs_enrichment:!post.comments_complete||textStillTruncated||missingAuthor||missingDate,
     enrichment:{
       at:nowIso(),
       target_exact_links:selected.exact,
+      expected_comment_count:expectedComments,
+      existing_local_comments:existingLocalCount,
       initial_nested_articles:initialNested,
       final_nested_articles:nestedNow,
-      comments_captured:comments.length,
+      unique_comments_seen:comments.length,
+      snapshots,
+      scroll_cycles:cycles,
+      scroll_at_end:!!lastScroll.atEnd,
       text_clicks:textClicks,
       all_comments_selected:!!allCommentsSelected,
       comment_expand_clicks:totalClicks,
@@ -968,7 +1070,9 @@ async function enrichCurrentPost(){
 
   let media=mediaFromRoot(article,'post',post.key).map(m=>({...m,owner_key:post.key}));
   for(const comment of comments){
-    for(const m of mediaFromRoot(comment._article,'comment',comment.key))media.push({...m,owner_key:comment.key});
+    if(comment._article){
+      for(const m of mediaFromRoot(comment._article,'comment',comment.key))media.push({...m,owner_key:comment.key});
+    }
   }
 
   const result=await persistBundle(post,comments,media);
@@ -981,13 +1085,14 @@ async function enrichCurrentPost(){
     else window.scrollTo(0,startWindowY);
   }catch{}
 
-  const msg='Обогащено безопасно: комментариев '+comments.length+
+  const denominator=expectedComments!==null?'/'+expectedComments:'';
+  const msg='Обогащено: комментариев '+comments.length+denominator+
+    ' · было локально '+existingLocalCount+
     ' · DOM '+initialNested+'→'+nestedNow+
-    ' · '+(post.comments_complete?'ветки раскрыты':'часть веток ещё скрыта')+
-    ' · '+(missingDate?'дата не найдена':'дата есть')+
-    ' · '+(missingAuthor?'автор не найден':'автор есть');
+    ' · '+(post.comments_complete?'обсуждение полное':'ещё неполное')+
+    ' · '+(missingDate?'дата не найдена':'дата есть');
   render(msg);
-  return {ok:true,facebook_post_id:pagePostId,post_key:post.key,comments:comments.length,initial_nested:initialNested,final_nested:nestedNow,media:media.length,comments_complete:post.comments_complete,result};
+  return {ok:true,facebook_post_id:pagePostId,post_key:post.key,comments:comments.length,expected_comments:expectedComments,existing_local_comments:existingLocalCount,initial_nested:initialNested,final_nested:nestedNow,cycles,snapshots,comments_complete:post.comments_complete,result};
 }
 
 async function processArticle(article){
