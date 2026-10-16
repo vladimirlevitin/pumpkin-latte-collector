@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.6.9-enrichment-pilot';
+const VERSION='pla-fb-archive-v2.7.0-enrichment-pilot';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -380,33 +380,73 @@ function commentScopeForPost(postArticle){
   return document.body||postArticle;
 }
 
+function nearbyCommentContainer(node,root,postArticle){
+  let p=node?.parentElement||null,best=null;
+  for(let i=0;p&&i<9;i++,p=p.parentElement){
+    if(p===postArticle||p.contains?.(postArticle))continue;
+    if(root&&p!==root&&!root.contains?.(p))break;
+    const s=text(p);
+    if(s.length>=2&&s.length<=3500){
+      const hasMessage=!!p.querySelector?.('[data-ad-preview="message"],[data-ad-comet-preview="message"]');
+      const hasCommentLink=!![...p.querySelectorAll?.('a[href]')||[]].some(a=>/[?&](?:comment_id|reply_comment_id)=\d+/.test(a.href||a.getAttribute('href')||''));
+      const hasInteraction=/(Нравится|Ответить|Like|Reply|אהבתי|השב)/i.test(s);
+      if(hasMessage||hasCommentLink||hasInteraction)best=p;
+      if((hasMessage||hasCommentLink)&&s.length<1800)return p;
+    }
+    if(p===root)break;
+  }
+  return best;
+}
+
 async function buildComments(postArticle,postRecord,scopeRoot=null){
   const root=scopeRoot||postArticle;
-  const nested=[...root.querySelectorAll('[role="article"]')].filter(a=>{
-    if(a===postArticle||a.contains(postArticle))return false;
-    if(!visible(a))return false;
-    const s=extractOwnText(a,'comment');
-    return !!s;
-  });
-  const articleToTemp=new Map();
-  const rows=[];
-  for(let i=0;i<nested.length;i++)articleToTemp.set(nested[i],`c${i}`);
-  for(const article of nested){
-    const s=extractOwnText(article,'comment');
+
+  // The group feed uses nested role=article comments. A direct permalink can use
+  // a different DOM, so enrichment also discovers comment message nodes and
+  // comment permalink anchors.
+  const units=[];
+  const seenNodes=new Set();
+  const pushUnit=(container,forcedText=null)=>{
+    if(!container||seenNodes.has(container)||container===postArticle||container.contains?.(postArticle))return;
+    const s=norm(forcedText||extractOwnText(container,'comment'));
+    if(!s||s===norm(postRecord.text||'')||s.length>12000)return;
+    seenNodes.add(container);units.push({container,s});
+  };
+
+  for(const article of root.querySelectorAll?.('[role="article"]')||[]){
+    if(!visible(article))continue;
+    pushUnit(article);
+  }
+
+  const postMessage=postArticle.querySelector?.('[data-ad-preview="message"],[data-ad-comet-preview="message"]');
+  for(const msg of root.querySelectorAll?.('[data-ad-preview="message"],[data-ad-comet-preview="message"]')||[]){
+    if(msg===postMessage||postMessage?.contains?.(msg)||!visible(msg))continue;
+    const s=norm(cleanLines(text(msg)).join('\n'));
     if(!s)continue;
+    const container=msg.closest?.('[role="article"]')||nearbyCommentContainer(msg,root,postArticle)||msg.parentElement;
+    pushUnit(container,s);
+  }
+
+  for(const a of root.querySelectorAll?.('a[href]')||[]){
+    const href=a.href||a.getAttribute('href')||'';
+    if(!/[?&](?:comment_id|reply_comment_id)=\d+/.test(href))continue;
+    const container=a.closest?.('[role="article"]')||nearbyCommentContainer(a,root,postArticle);
+    if(container)pushUnit(container);
+  }
+
+  const rows=[],dedupe=new Set();
+  for(let i=0;i<units.length;i++){
+    const article=units[i].container,s=units[i].s;
     const author=extractAuthor(article);
     const facebook_comment_id=commentPermalinkId(article);
-    const parentArticle=nearestParentCommentArticle(article,postArticle);
-    const parentTempKey=parentArticle?articleToTemp.get(parentArticle)||null:null;
-    let depth=0,p=parentArticle;while(p&&p!==postArticle&&depth<20){depth++;p=nearestParentCommentArticle(p,postArticle);}
     const commented_at=commentDate(article);
-    const fallback=await sha256([postRecord.key,parentTempKey||'',author.facebook_author_id||author.display_name||'',s,commented_at||''].join('|'));
+    const dedupeKey=facebook_comment_id||[author.display_name||'',s,commented_at||''].join('|');
+    if(dedupe.has(dedupeKey))continue;dedupe.add(dedupeKey);
+    const fallback=await sha256([postRecord.key,author.facebook_author_id||author.display_name||'',s,commented_at||''].join('|'));
     const key=facebook_comment_id?`fb:${GROUP_PATH}:comment:${facebook_comment_id}`:`fb:${GROUP_PATH}:commenthash:${fallback}`;
-    const content_hash=await sha256([s,commented_at||'',parentTempKey||''].join('|'));
-    rows.push({key,temp_key:articleToTemp.get(article),post_key:postRecord.key,parent_temp_key:parentTempKey,facebook_comment_id,depth,text:s,author,commented_at,content_hash,first_seen_at:nowIso(),last_seen_at:nowIso(),_article:article});
+    const content_hash=await sha256([s,commented_at||''].join('|'));
+    rows.push({key,temp_key:`c${rows.length}`,post_key:postRecord.key,parent_temp_key:null,parent_comment_key:null,facebook_comment_id,depth:0,text:s,author,commented_at,content_hash,first_seen_at:nowIso(),last_seen_at:nowIso(),_article:article});
   }
-  const tempToKey=new Map(rows.map(r=>[r.temp_key,r.key]));
-  for(const r of rows)r.parent_comment_key=r.parent_temp_key?tempToKey.get(r.parent_temp_key)||null:null;
   return rows;
 }
 
@@ -558,101 +598,59 @@ async function markSyncStatus(postKey,statusValue,error=''){
   await putOne('posts',{...post,sync_status:statusValue,sync_error:error||null,synced_at:statusValue==='synced'?nowIso():(post.synced_at||null)});
 }
 
-async function submitPayloadsAndWait(payloads){
-  // Preferred transport: direct CORS fetch from the Facebook tab.
-  // This avoids Chrome/CSP blocking a cross-origin form inside the helper popup.
-  try{
-    syncWindowStatus(`Отправляю пакет напрямую: ${payloads.length} постов…`);
-    const response=await fetch(INGEST_URL,{
-      method:'POST',
-      headers:{'content-type':'application/json'},
-      body:JSON.stringify({api_key:PUBLISHABLE_KEY,payloads})
-    });
-    const data=await response.json().catch(()=>({}));
-    if(response.ok&&data?.ok){
-      syncWindowStatus(`Сохранено в Supabase: ${Number(data.saved||0)}`);
-      return {ok:true,confirmed:true,saved:Number(data.saved||0),direct:true};
-    }
-    if(response.status&&response.status!==0){
-      syncWindowStatus(`Прямой sync: ошибка ${data?.error||response.status}; пробую резервный способ…`);
-    }
-  }catch(_directError){
-    syncWindowStatus('Прямой sync недоступен; пробую резервный способ…');
-  }
-
+function submitPayloadsAndWait(payloads){
   return new Promise(resolve=>{
-    // Fallback transport retained for browsers where direct CORS fetch is unavailable.
-    const w=syncWin&&!syncWin.closed?syncWin:null;
-    if(!w){resolve({ok:false,error:'sync_window_closed'});return;}
+    const w=ensureSyncWindow();
+    if(!w){resolve({ok:false,error:'popup_blocked'});return;}
 
     const ack='ack-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
-    const frameName='PLA_SYNC_FRAME_'+ack.replace(/[^A-Za-z0-9_]/g,'_');
-    let iframe,form;
-    try{
-      iframe=w.document.createElement('iframe');
-      iframe.name=frameName;
-      iframe.style.display='none';
-      (w.document.getElementById('pla-sync-frames')||w.document.body).appendChild(iframe);
+    const target='PLA_SYNC_HOST';
+    try{w.name=target;}catch{}
 
-      form=w.document.createElement('form');
-      form.method='POST';
-      form.action=INGEST_URL;
-      form.target=frameName;
-      form.style.display='none';
-      for(const [name,value] of [['api_key',PUBLISHABLE_KEY],['mode','popup'],['ack',ack],['payloads',JSON.stringify(payloads)]]){
-        const input=w.document.createElement('input');
-        input.type='hidden';input.name=name;input.value=value;form.appendChild(input);
-      }
-      w.document.body.appendChild(form);
-      syncWindowStatus(`Отправляю пакет: ${payloads.length} постов…`);
-      form.submit();
-      form.remove();
-    }catch(e){
-      try{form?.remove();iframe?.remove();}catch{}
-      resolve({ok:false,error:String(e?.message||e)});
-      return;
+    const form=document.createElement('form');
+    form.method='POST';form.action=INGEST_URL;form.target=target;form.style.display='none';
+    for(const [name,value] of [['api_key',PUBLISHABLE_KEY],['mode','popup'],['ack',ack],['payloads',JSON.stringify(payloads)]]){
+      const input=document.createElement('input');input.type='hidden';input.name=name;input.value=value;form.appendChild(input);
     }
+    document.body.appendChild(form);
+    syncWindowStatus(`Отправляю пакет: ${payloads.length} постов…`);
+    try{form.submit();}catch(e){form.remove();resolve({ok:false,error:String(e?.message||e)});return;}
+    form.remove();
 
     let checks=0,done=false;
-    const finish=result=>{
-      if(done)return;
-      done=true;
-      try{iframe?.remove();}catch{}
-      resolve(result);
-    };
+    const finish=result=>{if(done)return;done=true;resolve(result);};
     const timer=setInterval(()=>{
       checks++;
       if(!syncWin||syncWin.closed){
-        clearInterval(timer);
-        finish({ok:false,error:'sync_window_closed'});
-        return;
+        clearInterval(timer);finish({ok:false,error:'popup_closed'});return;
       }
       try{
-        const href=iframe?.contentWindow?.location?.href||'';
+        const href=syncWin.location.href||'';
         if(href.startsWith(location.origin+'/')){
           const u=new URL(href);
           if(u.searchParams.get('pla_sync')===ack){
             clearInterval(timer);
             const ok=u.searchParams.get('pla_ok')==='1';
             const saved=Number(u.searchParams.get('pla_saved')||0);
-            syncWindowStatus(ok?`Сохранено в Supabase: ${saved}`:`Ошибка синхронизации: ${u.searchParams.get('pla_error')||'unknown'}`);
-            finish({ok,confirmed:true,saved,error:u.searchParams.get('pla_error')||''});
+            const error=u.searchParams.get('pla_error')||'';
+            try{
+              syncWin.document.open();
+              syncWin.document.write('<!doctype html><meta charset="utf-8"><title>Pumpkin Sync</title><body style="font:16px Arial;padding:18px"><b>Pumpkin → Supabase</b><p id="pla-sync-status">'+(ok?'Сохранено в Supabase: '+saved:'Ошибка синхронизации: '+error)+'</p></body>');
+              syncWin.document.close();
+            }catch{}
+            finish({ok,confirmed:true,saved,error});
             return;
           }
         }
       }catch{}
       if(checks>=40){
         clearInterval(timer);
-        // The request may have reached Supabase even if the final Facebook
-        // acknowledgement page was blocked inside the iframe. Mark it as
-        // submitted, not synced; a later retry is safe because batch_key is upserted.
         syncWindowStatus('Пакет отправлен; подтверждение не получено');
         finish({ok:true,confirmed:false,submitted:true});
       }
     },500);
   });
 }
-
 async function drainSyncQueue(){
   if(syncBusy)return;
   syncBusy=true;
@@ -788,9 +786,26 @@ async function enrichCurrentPost(){
   const allCommentsSelected=await tryAllComments(commentScope);
   await sleep(900);
 
-  render('Обогащение: раскрываю комментарии и ответы…');
-  const expansion=await expandComments(commentScope,16,10);
-  await sleep(1200);
+  render('Обогащение: раскрываю и подгружаю комментарии…');
+  let totalClicks=0,stable=0,previousCount=-1;
+  for(let cycle=0;cycle<12;cycle++){
+    const ex=await expandComments(commentScope,2,10);
+    totalClicks+=ex.totalClicks||0;
+    const roleCount=(commentScope.querySelectorAll?.('[role="article"]')||[]).length;
+    const msgCount=(commentScope.querySelectorAll?.('[data-ad-preview="message"],[data-ad-comet-preview="message"]')||[]).length;
+    const linkCount=[...(commentScope.querySelectorAll?.('a[href]')||[])].filter(a=>/[?&](?:comment_id|reply_comment_id)=\d+/.test(a.href||a.getAttribute('href')||'')).length;
+    const count=Math.max(roleCount,msgCount,linkCount);
+    if(count===previousCount)stable++;else stable=0;
+    previousCount=count;
+    if(stable>=2&&!(ex.totalClicks>0))break;
+    try{
+      if(commentScope===document.body||commentScope.getAttribute?.('role')==='main')window.scrollBy(0,Math.max(500,innerHeight*.65));
+      else commentScope.scrollTop+=Math.max(400,commentScope.clientHeight*.65);
+    }catch{}
+    await sleep(850);
+  }
+  const expansion={totalClicks,complete:remainingExpandControls(commentScope).length===0};
+  await sleep(700);
 
   const post=await buildPostRecord(article);
   if(String(post.facebook_post_id||'')!==String(pagePostId)){
