@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.6.6-single-sync-window';
+const VERSION='pla-fb-archive-v2.6.7-enrichment-pilot';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -427,17 +427,18 @@ function remainingExpandControls(article){
   });
 }
 
-async function expandComments(article){
+async function expandComments(article,maxCycles=MAX_EXPAND_CYCLES,maxClicksPerCycle=MAX_CLICKS_PER_CYCLE){
   let totalClicks=0;
-  for(let cycle=0;cycle<MAX_EXPAND_CYCLES;cycle++){
+  for(let cycle=0;cycle<maxCycles;cycle++){
     if(!article?.isConnected)break;
-    const controls=remainingExpandControls(article).slice(0,MAX_CLICKS_PER_CYCLE);
+    const controls=remainingExpandControls(article).slice(0,maxClicksPerCycle);
     if(!controls.length)break;
+    let cycleClicks=0;
     for(const el of controls){
       if(!article.isConnected)break;
-      if(clickSafe(el)){totalClicks++;await sleep(180);}
+      if(clickSafe(el)){totalClicks++;cycleClicks++;await sleep(220);}
     }
-    if(totalClicks)await sleep(ACTION_DELAY_MS);
+    if(cycleClicks)await sleep(Math.max(ACTION_DELAY_MS,650));
   }
   return {totalClicks,complete:article?.isConnected?remainingExpandControls(article).length===0:false};
 }
@@ -678,7 +679,7 @@ async function persistAuthor(author){
 async function upsertRecord(store,row){
   const prev=await getOne(store,row.key);
   if(!prev){await putOne(store,row);return 'new';}
-  if(prev.content_hash&&row.content_hash&&prev.content_hash===row.content_hash){await putOne(store,{...prev,last_seen_at:nowIso(),comments_complete:row.comments_complete??prev.comments_complete});return 'unchanged';}
+  if(prev.content_hash&&row.content_hash&&prev.content_hash===row.content_hash){await putOne(store,{...prev,...row,first_seen_at:prev.first_seen_at||row.first_seen_at,last_seen_at:nowIso(),comments_complete:row.comments_complete??prev.comments_complete});return 'unchanged';}
   await putOne(store,{...prev,...row,first_seen_at:prev.first_seen_at||row.first_seen_at,last_seen_at:nowIso()});
   return 'updated';
 }
@@ -702,6 +703,102 @@ let running=false,timer=null,targetNew=100,seenSession=new Set(),emptyScans=0,wa
 async function saveCrawlState(extra={}){
   const state={key:STATE_KEY,collector_version:VERSION,schema_version:SCHEMA_VERSION,group:GROUP_PATH,page_url:location.href,updated_at:nowIso(),stats:{...stats},...extra};
   await putOne('crawl_state',state);return state;
+}
+
+function currentPagePostId(){
+  const href=location.href||'';
+  return (href.match(/\/posts\/(\d+)/)||href.match(/[?&]story_fbid=(\d+)/)||[])[1]||null;
+}
+
+function currentPostArticle(){
+  const id=currentPagePostId();
+  if(!id)return null;
+  const articles=topArticles();
+  for(const article of articles){
+    const meta=permalinkMeta(article);
+    if(String(meta?.facebook_post_id||'')===String(id))return article;
+  }
+  return null;
+}
+
+async function enrichCurrentPost(){
+  stop();
+  const pagePostId=currentPagePostId();
+  if(!pagePostId){
+    render('Обогащение: откройте оригинал одного поста Facebook (/posts/ID/)');
+    return {ok:false,error:'not_single_post_page'};
+  }
+
+  // Must be called from a direct button click so the one sync helper window is allowed.
+  ensureSyncWindow();
+  const article=currentPostArticle();
+  if(!article){
+    render('Обогащение: пост ещё не отрисован Facebook. Прокрутите к посту и повторите.');
+    return {ok:false,error:'post_article_not_found',facebook_post_id:pagePostId};
+  }
+
+  render('Обогащение: раскрываю полный текст…');
+  let textClicks=0;
+  for(let i=0;i<3;i++){
+    const n=await expandPostText(article);
+    textClicks+=n;
+    if(!n)break;
+    await sleep(350);
+  }
+
+  render('Обогащение: включаю все комментарии…');
+  const allCommentsSelected=await tryAllComments(article);
+  await sleep(700);
+
+  render('Обогащение: раскрываю комментарии и ответы…');
+  const expansion=await expandComments(article,12,8);
+  await sleep(900);
+
+  const post=await buildPostRecord(article);
+  if(String(post.facebook_post_id||'')!==String(pagePostId)){
+    render('Обогащение остановлено: ID открытого поста не совпал.');
+    return {ok:false,error:'post_id_mismatch',expected:pagePostId,actual:post.facebook_post_id||null};
+  }
+
+  const comments=await buildComments(article,post);
+  const remaining=remainingExpandControls(article).length;
+  const textStillTruncated=/(?:\.\.\.|…)[\s\u00a0]*(?:Ещё|See more|הצג עוד)[\s\u00a0]*$/i.test(post.text||'');
+  const missingAuthor=!post.author?.display_name;
+  const missingDate=!post.posted_at;
+  post.comments_complete=remaining===0;
+  post.raw_metadata={
+    ...(post.raw_metadata||{}),
+    capture_mode:'enrichment',
+    needs_enrichment:!post.comments_complete||textStillTruncated||missingAuthor||missingDate,
+    enrichment:{
+      at:nowIso(),
+      text_clicks:textClicks,
+      all_comments_selected:!!allCommentsSelected,
+      comment_expand_clicks:expansion.totalClicks,
+      remaining_expand_controls:remaining,
+      text_still_truncated:textStillTruncated,
+      missing_author:missingAuthor,
+      missing_date:missingDate
+    }
+  };
+
+  let media=mediaFromRoot(article,'post',post.key).map(m=>({...m,owner_key:post.key}));
+  for(const comment of comments){
+    for(const m of mediaFromRoot(comment._article,'comment',comment.key))media.push({...m,owner_key:comment.key});
+  }
+
+  const result=await persistBundle(post,comments,media);
+  lastSavedAt=nowIso();
+  await refreshDbCounts();
+  queueSyncPost(post.key,true);
+
+  const msg='Обогащено: текст '+(textStillTruncated?'ещё сокращён':'полный')+
+    ' · комментариев '+comments.length+
+    ' · '+(post.comments_complete?'ветки раскрыты':'остались скрытые ветки')+
+    ' · '+(missingDate?'дата не найдена':'дата есть')+
+    ' · '+(missingAuthor?'автор не найден':'автор есть');
+  render(msg);
+  return {ok:true,facebook_post_id:pagePostId,post_key:post.key,comments:comments.length,media:media.length,comments_complete:post.comments_complete,needs_enrichment:post.raw_metadata.needs_enrichment,result};
 }
 
 async function processArticle(article){
@@ -837,15 +934,15 @@ function render(msg=''){
 }
 
 const panel=document.createElement('div');panel.id=UI_ID;panel.style='position:fixed;top:12px;right:12px;width:400px;max-height:92vh;overflow:auto;z-index:2147483647;background:#fff;color:#111;border:2px solid #1877f2;border-radius:12px;padding:14px;font:16px/1.4 Arial,sans-serif;box-shadow:0 4px 20px #0005';
-panel.innerHTML=`<b style="font-size:18px">Pumpkin Latte Archive — PASSIVE + SYNC</b><span id="pla-x" style="float:right;cursor:pointer;font-size:22px">✕</span><div style="margin-top:8px"><small>${VERSION}</small></div><label style="display:block;margin-top:10px">Остановиться после N новых постов<input id="pla-count" type="number" min="1" max="1000" value="100" style="display:block;width:100%;box-sizing:border-box;padding:9px;margin-top:4px;font-size:16px"></label><div style="display:flex;gap:7px;margin-top:10px"><button id="pla-start" style="flex:1;padding:10px;font-size:16px">▶ Старт</button><button id="pla-stop" style="flex:1;padding:10px;font-size:16px">■ Стоп</button></div><div style="display:flex;gap:7px;margin-top:7px"><button id="pla-export" style="flex:1;padding:9px">Экспорт JSON</button><button id="pla-test" style="flex:1;padding:9px">Самотест</button></div><button id="pla-sync" style="width:100%;padding:9px;margin-top:7px">Синхронизировать локальную базу → Supabase</button><button id="pla-check" style="width:100%;padding:8px;margin-top:7px">Проверить базу</button><button id="pla-clear" style="width:100%;padding:8px;margin-top:7px">Очистить ТЕСТОВЫЕ данные</button><div id="pla-status" style="margin-top:10px;line-height:1.5"></div><div style="margin-top:8px;font-size:12px;color:#555">Сборщик не нажимает кнопки Facebook. Он сохраняет уже загруженные данные в IndexedDB и сразу синхронизирует их с приватным архивом Supabase.</div>`;
+panel.innerHTML=`<b style="font-size:18px">Pumpkin Latte Archive — PASSIVE + ENRICH</b><span id="pla-x" style="float:right;cursor:pointer;font-size:22px">✕</span><div style="margin-top:8px"><small>${VERSION}</small></div><label style="display:block;margin-top:10px">Остановиться после N новых постов<input id="pla-count" type="number" min="1" max="1000" value="100" style="display:block;width:100%;box-sizing:border-box;padding:9px;margin-top:4px;font-size:16px"></label><div style="display:flex;gap:7px;margin-top:10px"><button id="pla-start" style="flex:1;padding:10px;font-size:16px">▶ Старт</button><button id="pla-stop" style="flex:1;padding:10px;font-size:16px">■ Стоп</button></div><div style="display:flex;gap:7px;margin-top:7px"><button id="pla-export" style="flex:1;padding:9px">Экспорт JSON</button><button id="pla-test" style="flex:1;padding:9px">Самотест</button></div><button id="pla-enrich" style="width:100%;padding:10px;margin-top:7px;background:#fff4de;border:1px solid #f59e0b;border-radius:6px">✨ Обогатить текущий открытый пост</button><button id="pla-sync" style="width:100%;padding:9px;margin-top:7px">Синхронизировать локальную базу → Supabase</button><button id="pla-check" style="width:100%;padding:8px;margin-top:7px">Проверить базу</button><button id="pla-clear" style="width:100%;padding:8px;margin-top:7px">Очистить ТЕСТОВЫЕ данные</button><div id="pla-status" style="margin-top:10px;line-height:1.5"></div><div style="margin-top:8px;font-size:12px;color:#555">Обычный сбор остаётся пассивным и не нажимает кнопки Facebook. Кнопка «Обогатить текущий открытый пост» работает только на странице одного поста: раскрывает «Ещё», комментарии и ответы, затем обновляет IndexedDB и отправляет этот пост в Supabase.</div>`;
 document.body.appendChild(panel);
 const status=panel.querySelector('#pla-status'),countInput=panel.querySelector('#pla-count');
-panel.querySelector('#pla-start').onclick=start;panel.querySelector('#pla-stop').onclick=()=>stop();panel.querySelector('#pla-export').onclick=exportJson;panel.querySelector('#pla-sync').onclick=syncAllLocal;panel.querySelector('#pla-check').onclick=async()=>{await refreshDbCounts();render('База проверена')};panel.querySelector('#pla-clear').onclick=clearTestData;panel.querySelector('#pla-test').onclick=async()=>{const r=await selfTest();console.table(r.tests);console.log('PLA self-test',r)};panel.querySelector('#pla-x').onclick=()=>{stop();panel.style.display='none'};
+panel.querySelector('#pla-start').onclick=start;panel.querySelector('#pla-stop').onclick=()=>stop();panel.querySelector('#pla-export').onclick=exportJson;panel.querySelector('#pla-enrich').onclick=()=>{void enrichCurrentPost()};panel.querySelector('#pla-sync').onclick=syncAllLocal;panel.querySelector('#pla-check').onclick=async()=>{await refreshDbCounts();render('База проверена')};panel.querySelector('#pla-clear').onclick=clearTestData;panel.querySelector('#pla-test').onclick=async()=>{const r=await selfTest();console.table(r.tests);console.log('PLA self-test',r)};panel.querySelector('#pla-x').onclick=()=>{stop();panel.style.display='none'};
 async function refreshUi(){
   try{await refreshDbCounts();}catch{}
   render(running?'Собираю…':'Панель восстановлена');
 }
-window.__PLA_FB_ARCHIVE={panel,start,stop,scan:scanVisible,exportJson,selfTest,syncAll:syncAllLocal,version:VERSION,dbName:DB_NAME,stats,refresh:refreshUi};
+window.__PLA_FB_ARCHIVE={panel,start,stop,scan:scanVisible,enrichCurrentPost,exportJson,selfTest,syncAll:syncAllLocal,version:VERSION,dbName:DB_NAME,stats,refresh:refreshUi};
 watchdog=setInterval(async()=>{
   if(!panel.isConnected&&document.body)document.body.appendChild(panel);
   if(running){try{await refreshDbCounts();}catch{};render('Собираю…');}
