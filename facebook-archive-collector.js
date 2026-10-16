@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.6.7-enrichment-pilot';
+const VERSION='pla-fb-archive-v2.6.8-enrichment-pilot';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -369,8 +369,23 @@ async function buildPostRecord(article){
   return {key,facebook_post_id,canonical_url,posted_at:meta.posted_at||null,text:fullText,author,content_hash,first_seen_at:nowIso(),last_seen_at:nowIso(),comments_complete:false};
 }
 
-async function buildComments(postArticle,postRecord){
-  const nested=[...postArticle.querySelectorAll('[role="article"]')].filter(a=>a!==postArticle);
+function commentScopeForPost(postArticle){
+  if(!postArticle)return null;
+  const ownDialog=postArticle.closest?.('[role="dialog"]');
+  if(ownDialog)return ownDialog;
+  const dialogs=[...document.querySelectorAll('[role="dialog"]')].filter(visible);
+  for(const d of dialogs)if(d.contains(postArticle))return d;
+  return postArticle;
+}
+
+async function buildComments(postArticle,postRecord,scopeRoot=null){
+  const root=scopeRoot||postArticle;
+  const nested=[...root.querySelectorAll('[role="article"]')].filter(a=>{
+    if(a===postArticle||a.contains(postArticle))return false;
+    if(!visible(a))return false;
+    const s=extractOwnText(a,'comment');
+    return !!s;
+  });
   const articleToTemp=new Map();
   const rows=[];
   for(let i=0;i<nested.length;i++)articleToTemp.set(nested[i],`c${i}`);
@@ -541,10 +556,30 @@ async function markSyncStatus(postKey,statusValue,error=''){
   await putOne('posts',{...post,sync_status:statusValue,sync_error:error||null,synced_at:statusValue==='synced'?nowIso():(post.synced_at||null)});
 }
 
-function submitPayloadsAndWait(payloads){
+async function submitPayloadsAndWait(payloads){
+  // Preferred transport: direct CORS fetch from the Facebook tab.
+  // This avoids Chrome/CSP blocking a cross-origin form inside the helper popup.
+  try{
+    syncWindowStatus(`Отправляю пакет напрямую: ${payloads.length} постов…`);
+    const response=await fetch(INGEST_URL,{
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({api_key:PUBLISHABLE_KEY,payloads})
+    });
+    const data=await response.json().catch(()=>({}));
+    if(response.ok&&data?.ok){
+      syncWindowStatus(`Сохранено в Supabase: ${Number(data.saved||0)}`);
+      return {ok:true,confirmed:true,saved:Number(data.saved||0),direct:true};
+    }
+    if(response.status&&response.status!==0){
+      syncWindowStatus(`Прямой sync: ошибка ${data?.error||response.status}; пробую резервный способ…`);
+    }
+  }catch(_directError){
+    syncWindowStatus('Прямой sync недоступен; пробую резервный способ…');
+  }
+
   return new Promise(resolve=>{
-    // Do not call window.open here. If the one helper window was closed,
-    // wait for the user to press Sync/Start again instead of spawning popups.
+    // Fallback transport retained for browsers where direct CORS fetch is unavailable.
     const w=syncWin&&!syncWin.closed?syncWin:null;
     if(!w){resolve({ok:false,error:'sync_window_closed'});return;}
 
@@ -760,8 +795,9 @@ async function enrichCurrentPost(){
     return {ok:false,error:'post_id_mismatch',expected:pagePostId,actual:post.facebook_post_id||null};
   }
 
-  const comments=await buildComments(article,post);
-  const remaining=remainingExpandControls(article).length;
+  const commentScope=commentScopeForPost(article);
+  const comments=await buildComments(article,post,commentScope);
+  const remaining=remainingExpandControls(commentScope||article).length;
   const textStillTruncated=/(?:\.\.\.|…)[\s\u00a0]*(?:Ещё|See more|הצג עוד)[\s\u00a0]*$/i.test(post.text||'');
   const missingAuthor=!post.author?.display_name;
   const missingDate=!post.posted_at;
