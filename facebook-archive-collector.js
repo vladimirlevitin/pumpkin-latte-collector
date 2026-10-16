@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.7.3-preview-only';
+const VERSION='pla-fb-archive-v2.8.0-dialog-enrichment';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -741,63 +741,253 @@ function currentPagePostId(){
   return (href.match(/\/posts\/(\d+)/)||href.match(/[?&]story_fbid=(\d+)/)||[])[1]||null;
 }
 
-function currentPostArticle(){
-  const id=currentPagePostId();
-  if(!id)return null;
-  const candidates=[];
-  for(const article of topArticles()){
-    const meta=permalinkMeta(article);
-    if(String(meta?.facebook_post_id||'')!==String(id))continue;
-    const r=article.getBoundingClientRect?.()||{height:0,width:0};
-    const nested=[...article.querySelectorAll?.('[role="article"]')||[]].filter(x=>x!==article&&visible(x)).length;
-    const exactLinks=[...article.querySelectorAll?.('a[href]')||[]].filter(a=>{
-      const href=a.href||a.getAttribute('href')||'';
-      return href.includes('/posts/'+id+'/')||href.includes('/posts/'+id+'?')||href.endsWith('/posts/'+id);
-    }).length;
-    const chars=text(article).length;
-    // Direct permalink pages usually have one large outer article containing the post
-    // plus its visible comments. Comment rows and unrelated feed cards score far lower.
-    const score=nested*5000+exactLinks*1200+Math.min(Number(r.height||0),3000)+Math.min(chars,10000)/4;
-    candidates.push({article,meta,score,nested,exactLinks,chars,height:Number(r.height||0)});
-  }
-  candidates.sort((a,b)=>b.score-a.score);
-  const best=candidates[0];
-  if(!best)return null;
-  const second=candidates[1];
-  const confident=best.nested>=2||best.exactLinks>=2||!second||best.score>=second.score*1.25;
-  if(!confident)return null;
-  return best.article;
+function hrefPostId(href){
+  const s=String(href||'');
+  return (s.match(/\/(?:posts|permalink)\/(\d+)/)||s.match(/[?&]story_fbid=(\d+)/)||[])[1]||null;
 }
 
-async function previewCurrentPost(){
+function exactPostAnchorCount(root,id){
+  if(!root||!id)return 0;
+  let n=0;
+  for(const a of root.querySelectorAll?.('a[href]')||[]){
+    if(String(hrefPostId(a.href||a.getAttribute('href')||''))===String(id))n++;
+  }
+  return n;
+}
+
+function activePostRoot(id){
+  const dialogs=[...document.querySelectorAll('[role="dialog"]')].filter(visible);
+  const scored=dialogs.map(d=>{
+    const r=d.getBoundingClientRect?.()||{width:0,height:0};
+    return {root:d,exact:exactPostAnchorCount(d,id),area:Number(r.width||0)*Number(r.height||0),chars:text(d).length};
+  }).filter(x=>x.exact>0);
+  scored.sort((a,b)=>b.exact-a.exact||b.area-a.area||b.chars-a.chars);
+  return scored[0]?.root||document;
+}
+
+function outerArticles(root){
+  const all=[...root.querySelectorAll?.('[role="article"]')||[]].filter(visible);
+  return all.filter(a=>{
+    let p=a.parentElement;
+    while(p&&p!==root){
+      if(p.matches?.('[role="article"]'))return false;
+      p=p.parentElement;
+    }
+    return true;
+  });
+}
+
+function currentPostSelection(id=currentPagePostId()){
+  if(!id)return null;
+  const root=activePostRoot(id);
+  const candidates=outerArticles(root).map(article=>{
+    const r=article.getBoundingClientRect?.()||{width:0,height:0};
+    const exact=exactPostAnchorCount(article,id);
+    const nested=[...article.querySelectorAll?.('[role="article"]')||[]].filter(x=>x!==article).length;
+    const chars=text(article).length;
+    return {article,root,exact,nested,chars,area:Number(r.width||0)*Number(r.height||0)};
+  }).filter(x=>x.exact>0);
+
+  candidates.sort((a,b)=>b.exact-a.exact||b.nested-a.nested||b.chars-a.chars||b.area-a.area);
+  const best=candidates[0],second=candidates[1];
+  if(!best)return null;
+
+  // Diagnostic on the pilot showed the correct opened post is the outer article
+  // that contains many repeated links to the same post plus nested comment articles.
+  // A background/feed card normally has only one such link.
+  const separated=!second||best.exact>second.exact||best.nested>second.nested+2;
+  const confident=best.exact>=2&&best.nested>=1&&best.chars>=120&&separated;
+  return confident?best:null;
+}
+
+function scrollContainerFor(article,root){
+  let p=article?.parentElement||null;
+  while(p&&p!==document.body){
+    try{
+      const cs=getComputedStyle(p);
+      if(/auto|scroll/i.test(cs.overflowY||'')&&p.scrollHeight>p.clientHeight+120)return p;
+    }catch{}
+    if(p===root)break;
+    p=p.parentElement;
+  }
+  if(root&&root!==document){
+    try{
+      const cs=getComputedStyle(root);
+      if(/auto|scroll/i.test(cs.overflowY||'')&&root.scrollHeight>root.clientHeight+120)return root;
+    }catch{}
+  }
+  return document.scrollingElement||document.documentElement;
+}
+
+function scrollComments(container){
+  try{
+    if(container===document.scrollingElement||container===document.documentElement||container===document.body){
+      window.scrollBy(0,Math.max(500,innerHeight*.58));
+    }else{
+      container.scrollTop+=Math.max(450,container.clientHeight*.62);
+    }
+  }catch{}
+}
+
+async function enrichCurrentPost(){
   stop();
   const pagePostId=currentPagePostId();
-  if(!pagePostId){render('Предпросмотр: откройте оригинал одного поста Facebook (/posts/ID/)');return {ok:false,error:'not_single_post_page'};}
-  const article=currentPostArticle();
-  if(!article){render('Предпросмотр: не удалось однозначно определить главный блок поста. Ничего не сохранено.');return {ok:false,error:'post_article_not_found'};}
+  if(!pagePostId){
+    render('Обогащение: откройте оригинал одного поста Facebook (/posts/ID/)');
+    return {ok:false,error:'not_single_post_page'};
+  }
+
+  // Open the one helper window from the direct user click; no data is sent until
+  // all identity guards below pass.
+  ensureSyncWindow();
+
+  let selected=currentPostSelection(pagePostId);
+  if(!selected){
+    render('Обогащение остановлено: не удалось однозначно определить открытый пост. Ничего не сохранено.');
+    return {ok:false,error:'post_target_ambiguous',facebook_post_id:pagePostId};
+  }
+
+  let article=selected.article,root=selected.root;
+  const scrollContainer=scrollContainerFor(article,root);
+  const startWindowY=window.scrollY;
+  const startScrollTop=scrollContainer&&scrollContainer!==document.scrollingElement?scrollContainer.scrollTop:null;
+
+  const beforeText=extractOwnText(article,'post');
+  const beforePrefix=norm(beforeText).slice(0,120);
+  const beforeAuthor=extractAuthor(article)?.display_name||'';
+  const initialNested=[...article.querySelectorAll?.('[role="article"]')||[]].filter(x=>x!==article).length;
+
+  render('Обогащение: выбран открытый пост · ссылок '+selected.exact+' · комментариев в DOM '+initialNested);
+
+  let textClicks=0;
+  for(let i=0;i<3;i++){
+    if(String(currentPagePostId()||'')!==String(pagePostId)){
+      render('Обогащение остановлено: Facebook сменил открытый пост. Ничего не сохранено.');
+      return {ok:false,error:'route_changed_before_save'};
+    }
+    const n=await expandPostText(article);
+    textClicks+=n;
+    if(!n)break;
+    await sleep(350);
+  }
+
+  render('Обогащение: включаю все комментарии внутри открытого поста…');
+  const allCommentsSelected=await tryAllComments(article);
+  await sleep(900);
+
+  render('Обогащение: раскрываю и подгружаю комментарии внутри открытого поста…');
+  let totalClicks=0,stable=0,previousCount=-1;
+  for(let cycle=0;cycle<18;cycle++){
+    if(String(currentPagePostId()||'')!==String(pagePostId)){
+      render('Обогащение остановлено: Facebook сменил открытый пост. Ничего не сохранено.');
+      return {ok:false,error:'route_changed_during_enrichment'};
+    }
+
+    selected=currentPostSelection(pagePostId);
+    if(!selected){
+      render('Обогащение остановлено: потерян главный блок поста. Ничего не сохранено.');
+      return {ok:false,error:'post_target_lost'};
+    }
+    article=selected.article;
+
+    const ex=await expandComments(article,2,8);
+    totalClicks+=ex.totalClicks||0;
+    const roleCount=[...(article.querySelectorAll?.('[role="article"]')||[])].filter(x=>x!==article).length;
+    const linkCount=[...(article.querySelectorAll?.('a[href]')||[])].filter(a=>/[?&](?:comment_id|reply_comment_id)=\d+/.test(a.href||a.getAttribute('href')||'')).length;
+    const count=Math.max(roleCount,linkCount);
+
+    if(count===previousCount)stable++;else stable=0;
+    previousCount=count;
+
+    if(stable>=3&&!(ex.totalClicks>0))break;
+    scrollComments(scrollContainer);
+    await sleep(900);
+  }
+
+  if(String(currentPagePostId()||'')!==String(pagePostId)){
+    render('Обогащение остановлено: URL поста изменился. Ничего не сохранено.');
+    return {ok:false,error:'route_changed_before_persist'};
+  }
+
+  selected=currentPostSelection(pagePostId);
+  if(!selected){
+    render('Обогащение остановлено: главный блок поста не найден перед сохранением.');
+    return {ok:false,error:'post_target_missing_before_persist'};
+  }
+  article=selected.article;
 
   const post=await buildPostRecord(article);
-  if(String(post.facebook_post_id||'')!==String(pagePostId)){
-    render('Предпросмотр остановлен: ID блока не совпал с URL. Ничего не сохранено.');
-    return {ok:false,error:'post_id_mismatch',expected:pagePostId,actual:post.facebook_post_id||null};
+  // Identity comes from the URL we explicitly opened, not from a descendant comment link.
+  post.facebook_post_id=String(pagePostId);
+  post.key=`fb:${GROUP_PATH}:post:${pagePostId}`;
+  post.canonical_url=`https://www.facebook.com/groups/${GROUP_PATH}/posts/${pagePostId}/`;
+
+  const afterPrefix=norm(post.text||'').slice(0,120);
+  const samePostText=beforePrefix.length>=30&&afterPrefix.length>=30&&
+    (beforePrefix.startsWith(afterPrefix.slice(0,Math.min(80,afterPrefix.length)))||
+     afterPrefix.startsWith(beforePrefix.slice(0,Math.min(80,beforePrefix.length))));
+  const sameAuthor=!beforeAuthor||!post.author?.display_name||beforeAuthor===post.author.display_name;
+  const exactNow=exactPostAnchorCount(article,pagePostId);
+  const nestedNow=[...article.querySelectorAll?.('[role="article"]')||[]].filter(x=>x!==article).length;
+
+  if(!samePostText||!sameAuthor||exactNow<2||nestedNow<1){
+    render('Обогащение остановлено защитой: идентичность поста изменилась. Ничего не сохранено.');
+    return {ok:false,error:'identity_guard_failed',samePostText,sameAuthor,exactNow,nestedNow};
   }
+
   const comments=await buildComments(article,post,article);
-  const author=post.author?.display_name||'Автор не определён';
-  const report={
-    version:VERSION,
-    facebook_post_id:pagePostId,
-    author,
-    posted_at:post.posted_at||null,
-    text_chars:(post.text||'').length,
-    text_preview:(post.text||'').slice(0,600),
-    comments_found:comments.length,
-    comments_preview:comments.slice(0,12).map(c=>({author:c.author?.display_name||'?',text:(c.text||'').slice(0,300)}))
+  if(initialNested>0&&comments.length===0){
+    render('Обогащение остановлено защитой: комментарии были видны, но не распознаны. Ничего не сохранено.');
+    return {ok:false,error:'comments_guard_failed',initialNested};
+  }
+
+  const remaining=remainingExpandControls(article).length;
+  const textStillTruncated=/(?:\.\.\.|…)[\s\u00a0]*(?:Ещё|See more|הצג עוד)[\s\u00a0]*$/i.test(post.text||'');
+  const missingAuthor=!post.author?.display_name;
+  const missingDate=!post.posted_at;
+  post.comments_complete=remaining===0;
+  post.raw_metadata={
+    ...(post.raw_metadata||{}),
+    capture_mode:'dialog_enrichment',
+    needs_enrichment:!post.comments_complete||textStillTruncated||missingAuthor||missingDate,
+    enrichment:{
+      at:nowIso(),
+      target_exact_links:selected.exact,
+      initial_nested_articles:initialNested,
+      final_nested_articles:nestedNow,
+      comments_captured:comments.length,
+      text_clicks:textClicks,
+      all_comments_selected:!!allCommentsSelected,
+      comment_expand_clicks:totalClicks,
+      remaining_expand_controls:remaining,
+      text_still_truncated:textStillTruncated,
+      missing_author:missingAuthor,
+      missing_date:missingDate
+    }
   };
-  const box=panel.querySelector('#pla-preview-output');
-  if(box){box.value=JSON.stringify(report,null,2);box.style.display='block';}
-  render('ПРЕДПРОСМОТР: найден пост '+author+' · текст '+report.text_chars+' знаков · комментариев '+comments.length+' · НИЧЕГО НЕ СОХРАНЕНО');
-  console.log('PLA PREVIEW',report);
-  return report;
+
+  let media=mediaFromRoot(article,'post',post.key).map(m=>({...m,owner_key:post.key}));
+  for(const comment of comments){
+    for(const m of mediaFromRoot(comment._article,'comment',comment.key))media.push({...m,owner_key:comment.key});
+  }
+
+  const result=await persistBundle(post,comments,media);
+  lastSavedAt=nowIso();
+  await refreshDbCounts();
+  queueSyncPost(post.key,true);
+
+  try{
+    if(startScrollTop!==null&&scrollContainer)scrollContainer.scrollTop=startScrollTop;
+    else window.scrollTo(0,startWindowY);
+  }catch{}
+
+  const msg='Обогащено безопасно: комментариев '+comments.length+
+    ' · DOM '+initialNested+'→'+nestedNow+
+    ' · '+(post.comments_complete?'ветки раскрыты':'часть веток ещё скрыта')+
+    ' · '+(missingDate?'дата не найдена':'дата есть')+
+    ' · '+(missingAuthor?'автор не найден':'автор есть');
+  render(msg);
+  return {ok:true,facebook_post_id:pagePostId,post_key:post.key,comments:comments.length,initial_nested:initialNested,final_nested:nestedNow,media:media.length,comments_complete:post.comments_complete,result};
 }
 
 async function processArticle(article){
@@ -933,15 +1123,15 @@ function render(msg=''){
 }
 
 const panel=document.createElement('div');panel.id=UI_ID;panel.style='position:fixed;top:12px;right:12px;width:400px;max-height:92vh;overflow:auto;z-index:2147483647;background:#fff;color:#111;border:2px solid #1877f2;border-radius:12px;padding:14px;font:16px/1.4 Arial,sans-serif;box-shadow:0 4px 20px #0005';
-panel.innerHTML=`<b style="font-size:18px">Pumpkin Latte Archive — PREVIEW ONLY</b><span id="pla-x" style="float:right;cursor:pointer;font-size:22px">✕</span><div style="margin-top:8px"><small>${VERSION}</small></div><label style="display:block;margin-top:10px">Остановиться после N новых постов<input id="pla-count" type="number" min="1" max="1000" value="100" style="display:block;width:100%;box-sizing:border-box;padding:9px;margin-top:4px;font-size:16px"></label><div style="display:flex;gap:7px;margin-top:10px"><button id="pla-start" style="flex:1;padding:10px;font-size:16px">▶ Старт</button><button id="pla-stop" style="flex:1;padding:10px;font-size:16px">■ Стоп</button></div><div style="display:flex;gap:7px;margin-top:7px"><button id="pla-export" style="flex:1;padding:9px">Экспорт JSON</button><button id="pla-test" style="flex:1;padding:9px">Самотест</button></div><button id="pla-enrich" style="width:100%;padding:10px;margin-top:7px;background:#fff4de;border:1px solid #f59e0b;border-radius:6px">🔎 Предпросмотр текущего поста</button><textarea id="pla-preview-output" readonly style="display:none;width:100%;height:280px;box-sizing:border-box;margin-top:7px;font:12px monospace"></textarea><button id="pla-sync" disabled style="width:100%;padding:9px;margin-top:7px;opacity:.45">Сохранение отключено в этой версии</button><button id="pla-check" style="width:100%;padding:8px;margin-top:7px">Проверить базу</button><button id="pla-clear" style="width:100%;padding:8px;margin-top:7px">Очистить ТЕСТОВЫЕ данные</button><div id="pla-status" style="margin-top:10px;line-height:1.5"></div><div style="margin-top:8px;font-size:12px;color:#555">Эта версия ничего не нажимает в Facebook и ничего не сохраняет. Она только показывает, какой пост и какие уже загруженные комментарии будут захвачены.</div>`;
+panel.innerHTML=`<b style="font-size:18px">Pumpkin Latte Archive — PASSIVE + ENRICH</b><span id="pla-x" style="float:right;cursor:pointer;font-size:22px">✕</span><div style="margin-top:8px"><small>${VERSION}</small></div><label style="display:block;margin-top:10px">Остановиться после N новых постов<input id="pla-count" type="number" min="1" max="1000" value="100" style="display:block;width:100%;box-sizing:border-box;padding:9px;margin-top:4px;font-size:16px"></label><div style="display:flex;gap:7px;margin-top:10px"><button id="pla-start" style="flex:1;padding:10px;font-size:16px">▶ Старт</button><button id="pla-stop" style="flex:1;padding:10px;font-size:16px">■ Стоп</button></div><div style="display:flex;gap:7px;margin-top:7px"><button id="pla-export" style="flex:1;padding:9px">Экспорт JSON</button><button id="pla-test" style="flex:1;padding:9px">Самотест</button></div><button id="pla-enrich" style="width:100%;padding:10px;margin-top:7px;background:#fff4de;border:1px solid #f59e0b;border-radius:6px">✨ Обогатить текущий открытый пост</button><button id="pla-sync" style="width:100%;padding:9px;margin-top:7px">Синхронизировать локальную базу → Supabase</button><button id="pla-check" style="width:100%;padding:8px;margin-top:7px">Проверить базу</button><button id="pla-clear" style="width:100%;padding:8px;margin-top:7px">Очистить ТЕСТОВЫЕ данные</button><div id="pla-status" style="margin-top:10px;line-height:1.5"></div><div style="margin-top:8px;font-size:12px;color:#555">Обычный сбор остаётся пассивным. Обогащение работает только внутри однозначно найденного открытого поста/диалога, проверяет ID и текст до записи и ничего не сохраняет при смене поста.</div>`;
 document.body.appendChild(panel);
 const status=panel.querySelector('#pla-status'),countInput=panel.querySelector('#pla-count');
-panel.querySelector('#pla-start').disabled=true;panel.querySelector('#pla-stop').disabled=true;panel.querySelector('#pla-export').onclick=exportJson;panel.querySelector('#pla-enrich').onclick=()=>{void previewCurrentPost()};panel.querySelector('#pla-check').onclick=async()=>{await refreshDbCounts();render('База проверена')};panel.querySelector('#pla-clear').onclick=clearTestData;panel.querySelector('#pla-test').onclick=async()=>{const r=await selfTest();console.table(r.tests);console.log('PLA self-test',r)};panel.querySelector('#pla-x').onclick=()=>{stop();panel.style.display='none'};
+panel.querySelector('#pla-start').onclick=start;panel.querySelector('#pla-stop').onclick=()=>stop();panel.querySelector('#pla-export').onclick=exportJson;panel.querySelector('#pla-enrich').onclick=()=>{void enrichCurrentPost()};panel.querySelector('#pla-sync').onclick=syncAllLocal;panel.querySelector('#pla-check').onclick=async()=>{await refreshDbCounts();render('База проверена')};panel.querySelector('#pla-clear').onclick=clearTestData;panel.querySelector('#pla-test').onclick=async()=>{const r=await selfTest();console.table(r.tests);console.log('PLA self-test',r)};panel.querySelector('#pla-x').onclick=()=>{stop();panel.style.display='none'};
 async function refreshUi(){
   try{await refreshDbCounts();}catch{}
   render(running?'Собираю…':'Панель восстановлена');
 }
-window.__PLA_FB_ARCHIVE={panel,previewCurrentPost,exportJson,selfTest,version:VERSION,dbName:DB_NAME,stats,refresh:refreshUi};
+window.__PLA_FB_ARCHIVE={panel,start,stop,scan:scanVisible,enrichCurrentPost,exportJson,selfTest,syncAll:syncAllLocal,version:VERSION,dbName:DB_NAME,stats,refresh:refreshUi};
 watchdog=setInterval(async()=>{
   if(!panel.isConnected&&document.body)document.body.appendChild(panel);
   if(running){try{await refreshDbCounts();}catch{};render('Собираю…');}
