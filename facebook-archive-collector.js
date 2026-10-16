@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.7.2-safe-enrichment';
+const VERSION='pla-fb-archive-v2.7.3-preview-only';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -769,111 +769,35 @@ function currentPostArticle(){
   return best.article;
 }
 
-async function enrichCurrentPost(){
+async function previewCurrentPost(){
   stop();
   const pagePostId=currentPagePostId();
-  if(!pagePostId){
-    render('Обогащение: откройте оригинал одного поста Facebook (/posts/ID/)');
-    return {ok:false,error:'not_single_post_page'};
-  }
-
-  // Must be called from a direct button click so the one sync helper window is allowed.
-  ensureSyncWindow();
+  if(!pagePostId){render('Предпросмотр: откройте оригинал одного поста Facebook (/posts/ID/)');return {ok:false,error:'not_single_post_page'};}
   const article=currentPostArticle();
-  if(!article){
-    render('Обогащение: пост ещё не отрисован Facebook. Прокрутите к посту и повторите.');
-    return {ok:false,error:'post_article_not_found',facebook_post_id:pagePostId};
-  }
-
-  render('Обогащение: раскрываю полный текст…');
-  let textClicks=0;
-  for(let i=0;i<3;i++){
-    const n=await expandPostText(article);
-    textClicks+=n;
-    if(!n)break;
-    await sleep(350);
-  }
-
-  const commentScope=commentScopeForPost(article)||article;
-  const startScrollY=window.scrollY;
-  render('Обогащение: включаю все комментарии…');
-  const allCommentsSelected=await tryAllComments(commentScope);
-  await sleep(900);
-
-  render('Обогащение: раскрываю и подгружаю комментарии…');
-  let totalClicks=0,stable=0,previousCount=-1;
-  for(let cycle=0;cycle<14;cycle++){
-    const ex=await expandComments(commentScope,2,10);
-    totalClicks+=ex.totalClicks||0;
-    const roleCount=[...(commentScope.querySelectorAll?.('[role="article"]')||[])].filter(visible).length;
-    const linkCount=[...(commentScope.querySelectorAll?.('a[href]')||[])].filter(a=>/[?&](?:comment_id|reply_comment_id)=\d+/.test(a.href||a.getAttribute('href')||'')&&visible(a)).length;
-    const count=Math.max(roleCount,linkCount);
-    if(count===previousCount)stable++;else stable=0;
-    previousCount=count;
-    if(stable>=2&&!(ex.totalClicks>0))break;
-    try{window.scrollBy(0,Math.max(500,innerHeight*.60));}catch{}
-    await sleep(850);
-  }
-  const expansion={totalClicks,complete:remainingExpandControls(commentScope).length===0};
-  await sleep(700);
+  if(!article){render('Предпросмотр: не удалось однозначно определить главный блок поста. Ничего не сохранено.');return {ok:false,error:'post_article_not_found'};}
 
   const post=await buildPostRecord(article);
   if(String(post.facebook_post_id||'')!==String(pagePostId)){
-    try{window.scrollTo(0,startScrollY)}catch{}
-    render('Обогащение остановлено: ID открытого поста не совпал.');
+    render('Предпросмотр остановлен: ID блока не совпал с URL. Ничего не сохранено.');
     return {ok:false,error:'post_id_mismatch',expected:pagePostId,actual:post.facebook_post_id||null};
   }
-
-  const fullArticleText=text(article);
-  const postText=norm(post.text||'');
-  const looksLikeOuterPost=postText.length>=20 && fullArticleText.includes(postText.slice(0,Math.min(80,postText.length)));
-  const nestedVisible=[...(article.querySelectorAll?.('[role="article"]')||[])].filter(x=>x!==article&&visible(x)).length;
-  if(!looksLikeOuterPost || nestedVisible<1){
-    try{window.scrollTo(0,startScrollY)}catch{}
-    render('Обогащение остановлено защитой: выбранный блок Facebook не похож на открытый пост.');
-    return {ok:false,error:'unsafe_dom_target',nested_visible:nestedVisible,text_chars:postText.length};
-  }
-
-  const comments=await buildComments(article,post,commentScope);
-  const remaining=remainingExpandControls(commentScope).length;
-  const textStillTruncated=/(?:\.\.\.|…)[\s\u00a0]*(?:Ещё|See more|הצג עוד)[\s\u00a0]*$/i.test(post.text||'');
-  const missingAuthor=!post.author?.display_name;
-  const missingDate=!post.posted_at;
-  post.comments_complete=remaining===0;
-  post.raw_metadata={
-    ...(post.raw_metadata||{}),
-    capture_mode:'enrichment',
-    needs_enrichment:!post.comments_complete||textStillTruncated||missingAuthor||missingDate,
-    enrichment:{
-      at:nowIso(),
-      text_clicks:textClicks,
-      all_comments_selected:!!allCommentsSelected,
-      comment_expand_clicks:expansion.totalClicks,
-      remaining_expand_controls:remaining,
-      text_still_truncated:textStillTruncated,
-      missing_author:missingAuthor,
-      missing_date:missingDate
-    }
+  const comments=await buildComments(article,post,article);
+  const author=post.author?.display_name||'Автор не определён';
+  const report={
+    version:VERSION,
+    facebook_post_id:pagePostId,
+    author,
+    posted_at:post.posted_at||null,
+    text_chars:(post.text||'').length,
+    text_preview:(post.text||'').slice(0,600),
+    comments_found:comments.length,
+    comments_preview:comments.slice(0,12).map(c=>({author:c.author?.display_name||'?',text:(c.text||'').slice(0,300)}))
   };
-
-  let media=mediaFromRoot(article,'post',post.key).map(m=>({...m,owner_key:post.key}));
-  for(const comment of comments){
-    for(const m of mediaFromRoot(comment._article,'comment',comment.key))media.push({...m,owner_key:comment.key});
-  }
-
-  const result=await persistBundle(post,comments,media);
-  lastSavedAt=nowIso();
-  await refreshDbCounts();
-  queueSyncPost(post.key,true);
-  try{window.scrollTo(0,startScrollY)}catch{}
-
-  const msg='Обогащено: текст '+(textStillTruncated?'ещё сокращён':'полный')+
-    ' · комментариев '+comments.length+
-    ' · '+(post.comments_complete?'ветки раскрыты':'остались скрытые ветки')+
-    ' · '+(missingDate?'дата не найдена':'дата есть')+
-    ' · '+(missingAuthor?'автор не найден':'автор есть');
-  render(msg);
-  return {ok:true,facebook_post_id:pagePostId,post_key:post.key,comments:comments.length,media:media.length,comments_complete:post.comments_complete,needs_enrichment:post.raw_metadata.needs_enrichment,result};
+  const box=panel.querySelector('#pla-preview-output');
+  if(box){box.value=JSON.stringify(report,null,2);box.style.display='block';}
+  render('ПРЕДПРОСМОТР: найден пост '+author+' · текст '+report.text_chars+' знаков · комментариев '+comments.length+' · НИЧЕГО НЕ СОХРАНЕНО');
+  console.log('PLA PREVIEW',report);
+  return report;
 }
 
 async function processArticle(article){
@@ -1009,15 +933,15 @@ function render(msg=''){
 }
 
 const panel=document.createElement('div');panel.id=UI_ID;panel.style='position:fixed;top:12px;right:12px;width:400px;max-height:92vh;overflow:auto;z-index:2147483647;background:#fff;color:#111;border:2px solid #1877f2;border-radius:12px;padding:14px;font:16px/1.4 Arial,sans-serif;box-shadow:0 4px 20px #0005';
-panel.innerHTML=`<b style="font-size:18px">Pumpkin Latte Archive — PASSIVE + ENRICH</b><span id="pla-x" style="float:right;cursor:pointer;font-size:22px">✕</span><div style="margin-top:8px"><small>${VERSION}</small></div><label style="display:block;margin-top:10px">Остановиться после N новых постов<input id="pla-count" type="number" min="1" max="1000" value="100" style="display:block;width:100%;box-sizing:border-box;padding:9px;margin-top:4px;font-size:16px"></label><div style="display:flex;gap:7px;margin-top:10px"><button id="pla-start" style="flex:1;padding:10px;font-size:16px">▶ Старт</button><button id="pla-stop" style="flex:1;padding:10px;font-size:16px">■ Стоп</button></div><div style="display:flex;gap:7px;margin-top:7px"><button id="pla-export" style="flex:1;padding:9px">Экспорт JSON</button><button id="pla-test" style="flex:1;padding:9px">Самотест</button></div><button id="pla-enrich" style="width:100%;padding:10px;margin-top:7px;background:#fff4de;border:1px solid #f59e0b;border-radius:6px">✨ Обогатить текущий открытый пост</button><button id="pla-sync" style="width:100%;padding:9px;margin-top:7px">Синхронизировать локальную базу → Supabase</button><button id="pla-check" style="width:100%;padding:8px;margin-top:7px">Проверить базу</button><button id="pla-clear" style="width:100%;padding:8px;margin-top:7px">Очистить ТЕСТОВЫЕ данные</button><div id="pla-status" style="margin-top:10px;line-height:1.5"></div><div style="margin-top:8px;font-size:12px;color:#555">Обычный сбор остаётся пассивным и не нажимает кнопки Facebook. Кнопка «Обогатить текущий открытый пост» работает только на странице одного поста: раскрывает «Ещё», комментарии и ответы, затем обновляет IndexedDB и отправляет этот пост в Supabase.</div>`;
+panel.innerHTML=`<b style="font-size:18px">Pumpkin Latte Archive — PREVIEW ONLY</b><span id="pla-x" style="float:right;cursor:pointer;font-size:22px">✕</span><div style="margin-top:8px"><small>${VERSION}</small></div><label style="display:block;margin-top:10px">Остановиться после N новых постов<input id="pla-count" type="number" min="1" max="1000" value="100" style="display:block;width:100%;box-sizing:border-box;padding:9px;margin-top:4px;font-size:16px"></label><div style="display:flex;gap:7px;margin-top:10px"><button id="pla-start" style="flex:1;padding:10px;font-size:16px">▶ Старт</button><button id="pla-stop" style="flex:1;padding:10px;font-size:16px">■ Стоп</button></div><div style="display:flex;gap:7px;margin-top:7px"><button id="pla-export" style="flex:1;padding:9px">Экспорт JSON</button><button id="pla-test" style="flex:1;padding:9px">Самотест</button></div><button id="pla-enrich" style="width:100%;padding:10px;margin-top:7px;background:#fff4de;border:1px solid #f59e0b;border-radius:6px">🔎 Предпросмотр текущего поста</button><textarea id="pla-preview-output" readonly style="display:none;width:100%;height:280px;box-sizing:border-box;margin-top:7px;font:12px monospace"></textarea><button id="pla-sync" disabled style="width:100%;padding:9px;margin-top:7px;opacity:.45">Сохранение отключено в этой версии</button><button id="pla-check" style="width:100%;padding:8px;margin-top:7px">Проверить базу</button><button id="pla-clear" style="width:100%;padding:8px;margin-top:7px">Очистить ТЕСТОВЫЕ данные</button><div id="pla-status" style="margin-top:10px;line-height:1.5"></div><div style="margin-top:8px;font-size:12px;color:#555">Эта версия ничего не нажимает в Facebook и ничего не сохраняет. Она только показывает, какой пост и какие уже загруженные комментарии будут захвачены.</div>`;
 document.body.appendChild(panel);
 const status=panel.querySelector('#pla-status'),countInput=panel.querySelector('#pla-count');
-panel.querySelector('#pla-start').onclick=start;panel.querySelector('#pla-stop').onclick=()=>stop();panel.querySelector('#pla-export').onclick=exportJson;panel.querySelector('#pla-enrich').onclick=()=>{void enrichCurrentPost()};panel.querySelector('#pla-sync').onclick=syncAllLocal;panel.querySelector('#pla-check').onclick=async()=>{await refreshDbCounts();render('База проверена')};panel.querySelector('#pla-clear').onclick=clearTestData;panel.querySelector('#pla-test').onclick=async()=>{const r=await selfTest();console.table(r.tests);console.log('PLA self-test',r)};panel.querySelector('#pla-x').onclick=()=>{stop();panel.style.display='none'};
+panel.querySelector('#pla-start').disabled=true;panel.querySelector('#pla-stop').disabled=true;panel.querySelector('#pla-export').onclick=exportJson;panel.querySelector('#pla-enrich').onclick=()=>{void previewCurrentPost()};panel.querySelector('#pla-check').onclick=async()=>{await refreshDbCounts();render('База проверена')};panel.querySelector('#pla-clear').onclick=clearTestData;panel.querySelector('#pla-test').onclick=async()=>{const r=await selfTest();console.table(r.tests);console.log('PLA self-test',r)};panel.querySelector('#pla-x').onclick=()=>{stop();panel.style.display='none'};
 async function refreshUi(){
   try{await refreshDbCounts();}catch{}
   render(running?'Собираю…':'Панель восстановлена');
 }
-window.__PLA_FB_ARCHIVE={panel,start,stop,scan:scanVisible,enrichCurrentPost,exportJson,selfTest,syncAll:syncAllLocal,version:VERSION,dbName:DB_NAME,stats,refresh:refreshUi};
+window.__PLA_FB_ARCHIVE={panel,previewCurrentPost,exportJson,selfTest,version:VERSION,dbName:DB_NAME,stats,refresh:refreshUi};
 watchdog=setInterval(async()=>{
   if(!panel.isConnected&&document.body)document.body.appendChild(panel);
   if(running){try{await refreshDbCounts();}catch{};render('Собираю…');}
