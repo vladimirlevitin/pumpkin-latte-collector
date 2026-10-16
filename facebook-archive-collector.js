@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.7.0-enrichment-pilot';
+const VERSION='pla-fb-archive-v2.7.1-diagnostic';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -756,6 +756,56 @@ function currentPostArticle(){
   return null;
 }
 
+function diagnoseCurrentPost(){
+  stop();
+  const id=currentPagePostId();
+  const all=[...document.querySelectorAll('a[href]')];
+  const exact=all.filter(a=>{
+    const href=a.href||a.getAttribute('href')||'';
+    return href.includes('/posts/'+id+'/')||href.includes('/posts/'+id+'?')||href.endsWith('/posts/'+id);
+  });
+  const candidates=[];
+  const seen=new Set();
+  for(const a of exact){
+    let p=a;
+    for(let i=0;p&&i<8;i++,p=p.parentElement){
+      if(p.matches?.('[role="article"]')||i===7){
+        if(!seen.has(p)){
+          seen.add(p);
+          const r=p.getBoundingClientRect?.()||{};
+          const s=text(p);
+          candidates.push({tag:p.tagName,role:p.getAttribute?.('role')||'',top:Math.round(r.top||0),left:Math.round(r.left||0),width:Math.round(r.width||0),height:Math.round(r.height||0),chars:s.length,preview:s.slice(0,220)});
+        }
+        break;
+      }
+    }
+  }
+  const body=document.body;
+  const roleArticles=[...body.querySelectorAll('[role="article"]')].filter(visible);
+  const msgs=[...body.querySelectorAll('[data-ad-preview="message"],[data-ad-comet-preview="message"]')].filter(visible);
+  const commentLinks=[...body.querySelectorAll('a[href]')].filter(a=>/[?&](?:comment_id|reply_comment_id)=\d+/.test(a.href||a.getAttribute('href')||'')&&visible(a));
+  const replyControls=[...body.querySelectorAll('div[role="button"],span[role="button"],button')].filter(x=>/^(Ответить|Reply|השב)$/i.test(text(x))&&visible(x));
+  const likeControls=[...body.querySelectorAll('div[role="button"],span[role="button"],button')].filter(x=>/^(Нравится|Like|אהבתי)$/i.test(text(x))&&visible(x));
+  const out={
+    version:VERSION,
+    page_post_id:id,
+    exact_permalink_anchors:exact.length,
+    candidate_articles:candidates,
+    visible_role_articles:roleArticles.length,
+    visible_message_nodes:msgs.length,
+    visible_comment_links:commentLinks.length,
+    visible_reply_controls:replyControls.length,
+    visible_like_controls:likeControls.length,
+    first_role_articles:roleArticles.slice(0,12).map(x=>{const r=x.getBoundingClientRect?.()||{};return {top:Math.round(r.top||0),left:Math.round(r.left||0),w:Math.round(r.width||0),h:Math.round(r.height||0),chars:text(x).length,preview:text(x).slice(0,140)}}),
+    first_messages:msgs.slice(0,12).map(x=>({chars:text(x).length,preview:text(x).slice(0,140)}))
+  };
+  console.log('PLA DIAGNOSTIC',out);
+  const box=panel.querySelector('#pla-diag-output');
+  if(box){box.value=JSON.stringify(out,null,2);box.style.display='block';}
+  render('Диагностика готова. Ничего не сохранено и не отправлено.');
+  return out;
+}
+
 async function enrichCurrentPost(){
   stop();
   const pagePostId=currentPagePostId();
@@ -987,15 +1037,15 @@ function render(msg=''){
 }
 
 const panel=document.createElement('div');panel.id=UI_ID;panel.style='position:fixed;top:12px;right:12px;width:400px;max-height:92vh;overflow:auto;z-index:2147483647;background:#fff;color:#111;border:2px solid #1877f2;border-radius:12px;padding:14px;font:16px/1.4 Arial,sans-serif;box-shadow:0 4px 20px #0005';
-panel.innerHTML=`<b style="font-size:18px">Pumpkin Latte Archive — PASSIVE + ENRICH</b><span id="pla-x" style="float:right;cursor:pointer;font-size:22px">✕</span><div style="margin-top:8px"><small>${VERSION}</small></div><label style="display:block;margin-top:10px">Остановиться после N новых постов<input id="pla-count" type="number" min="1" max="1000" value="100" style="display:block;width:100%;box-sizing:border-box;padding:9px;margin-top:4px;font-size:16px"></label><div style="display:flex;gap:7px;margin-top:10px"><button id="pla-start" style="flex:1;padding:10px;font-size:16px">▶ Старт</button><button id="pla-stop" style="flex:1;padding:10px;font-size:16px">■ Стоп</button></div><div style="display:flex;gap:7px;margin-top:7px"><button id="pla-export" style="flex:1;padding:9px">Экспорт JSON</button><button id="pla-test" style="flex:1;padding:9px">Самотест</button></div><button id="pla-enrich" style="width:100%;padding:10px;margin-top:7px;background:#fff4de;border:1px solid #f59e0b;border-radius:6px">✨ Обогатить текущий открытый пост</button><button id="pla-sync" style="width:100%;padding:9px;margin-top:7px">Синхронизировать локальную базу → Supabase</button><button id="pla-check" style="width:100%;padding:8px;margin-top:7px">Проверить базу</button><button id="pla-clear" style="width:100%;padding:8px;margin-top:7px">Очистить ТЕСТОВЫЕ данные</button><div id="pla-status" style="margin-top:10px;line-height:1.5"></div><div style="margin-top:8px;font-size:12px;color:#555">Обычный сбор остаётся пассивным и не нажимает кнопки Facebook. Кнопка «Обогатить текущий открытый пост» работает только на странице одного поста: раскрывает «Ещё», комментарии и ответы, затем обновляет IndexedDB и отправляет этот пост в Supabase.</div>`;
+panel.innerHTML=`<b style="font-size:18px">Pumpkin Latte Archive — DIAGNOSTIC</b><span id="pla-x" style="float:right;cursor:pointer;font-size:22px">✕</span><div style="margin-top:8px"><small>${VERSION}</small></div><label style="display:block;margin-top:10px">Остановиться после N новых постов<input id="pla-count" type="number" min="1" max="1000" value="100" style="display:block;width:100%;box-sizing:border-box;padding:9px;margin-top:4px;font-size:16px"></label><div style="display:flex;gap:7px;margin-top:10px"><button id="pla-start" style="flex:1;padding:10px;font-size:16px">▶ Старт</button><button id="pla-stop" style="flex:1;padding:10px;font-size:16px">■ Стоп</button></div><div style="display:flex;gap:7px;margin-top:7px"><button id="pla-export" style="flex:1;padding:9px">Экспорт JSON</button><button id="pla-test" style="flex:1;padding:9px">Самотест</button></div><button id="pla-enrich" style="width:100%;padding:10px;margin-top:7px;background:#fff4de;border:1px solid #f59e0b;border-radius:6px">🔎 Диагностика текущего поста</button><textarea id="pla-diag-output" readonly style="display:none;width:100%;height:240px;box-sizing:border-box;margin-top:7px;font:12px monospace"></textarea><button id="pla-sync" disabled style="width:100%;padding:9px;margin-top:7px;opacity:.45">Синхронизация отключена в диагностической версии</button><button id="pla-check" style="width:100%;padding:8px;margin-top:7px">Проверить базу</button><button id="pla-clear" style="width:100%;padding:8px;margin-top:7px">Очистить ТЕСТОВЫЕ данные</button><div id="pla-status" style="margin-top:10px;line-height:1.5"></div><div style="margin-top:8px;font-size:12px;color:#555">Обычный сбор остаётся пассивным и не нажимает кнопки Facebook. Эта версия только диагностирует разметку открытого поста. Она ничего не сохраняет в IndexedDB и не отправляет в Supabase.</div>`;
 document.body.appendChild(panel);
 const status=panel.querySelector('#pla-status'),countInput=panel.querySelector('#pla-count');
-panel.querySelector('#pla-start').onclick=start;panel.querySelector('#pla-stop').onclick=()=>stop();panel.querySelector('#pla-export').onclick=exportJson;panel.querySelector('#pla-enrich').onclick=()=>{void enrichCurrentPost()};panel.querySelector('#pla-sync').onclick=syncAllLocal;panel.querySelector('#pla-check').onclick=async()=>{await refreshDbCounts();render('База проверена')};panel.querySelector('#pla-clear').onclick=clearTestData;panel.querySelector('#pla-test').onclick=async()=>{const r=await selfTest();console.table(r.tests);console.log('PLA self-test',r)};panel.querySelector('#pla-x').onclick=()=>{stop();panel.style.display='none'};
+panel.querySelector('#pla-start').disabled=true;panel.querySelector('#pla-stop').disabled=true;panel.querySelector('#pla-export').onclick=exportJson;panel.querySelector('#pla-enrich').onclick=()=>{diagnoseCurrentPost()};panel.querySelector('#pla-check').onclick=async()=>{await refreshDbCounts();render('База проверена')};panel.querySelector('#pla-clear').onclick=clearTestData;panel.querySelector('#pla-test').onclick=async()=>{const r=await selfTest();console.table(r.tests);console.log('PLA self-test',r)};panel.querySelector('#pla-x').onclick=()=>{stop();panel.style.display='none'};
 async function refreshUi(){
   try{await refreshDbCounts();}catch{}
   render(running?'Собираю…':'Панель восстановлена');
 }
-window.__PLA_FB_ARCHIVE={panel,start,stop,scan:scanVisible,enrichCurrentPost,exportJson,selfTest,syncAll:syncAllLocal,version:VERSION,dbName:DB_NAME,stats,refresh:refreshUi};
+window.__PLA_FB_ARCHIVE={panel,diagnoseCurrentPost,exportJson,selfTest,version:VERSION,dbName:DB_NAME,stats,refresh:refreshUi};
 watchdog=setInterval(async()=>{
   if(!panel.isConnected&&document.body)document.body.appendChild(panel);
   if(running){try{await refreshDbCounts();}catch{};render('Собираю…');}
