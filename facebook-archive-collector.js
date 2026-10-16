@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.6.8-enrichment-pilot';
+const VERSION='pla-fb-archive-v2.6.9-enrichment-pilot';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -373,9 +373,11 @@ function commentScopeForPost(postArticle){
   if(!postArticle)return null;
   const ownDialog=postArticle.closest?.('[role="dialog"]');
   if(ownDialog)return ownDialog;
-  const dialogs=[...document.querySelectorAll('[role="dialog"]')].filter(visible);
-  for(const d of dialogs)if(d.contains(postArticle))return d;
-  return postArticle;
+  const ownMain=postArticle.closest?.('[role="main"]');
+  if(ownMain)return ownMain;
+  const main=document.querySelector?.('[role="main"]');
+  if(main&&main.contains(postArticle))return main;
+  return document.body||postArticle;
 }
 
 async function buildComments(postArticle,postRecord,scopeRoot=null){
@@ -781,13 +783,14 @@ async function enrichCurrentPost(){
     await sleep(350);
   }
 
+  const commentScope=commentScopeForPost(article)||article;
   render('Обогащение: включаю все комментарии…');
-  const allCommentsSelected=await tryAllComments(article);
-  await sleep(700);
+  const allCommentsSelected=await tryAllComments(commentScope);
+  await sleep(900);
 
   render('Обогащение: раскрываю комментарии и ответы…');
-  const expansion=await expandComments(article,12,8);
-  await sleep(900);
+  const expansion=await expandComments(commentScope,16,10);
+  await sleep(1200);
 
   const post=await buildPostRecord(article);
   if(String(post.facebook_post_id||'')!==String(pagePostId)){
@@ -795,9 +798,8 @@ async function enrichCurrentPost(){
     return {ok:false,error:'post_id_mismatch',expected:pagePostId,actual:post.facebook_post_id||null};
   }
 
-  const commentScope=commentScopeForPost(article);
   const comments=await buildComments(article,post,commentScope);
-  const remaining=remainingExpandControls(commentScope||article).length;
+  const remaining=remainingExpandControls(commentScope).length;
   const textStillTruncated=/(?:\.\.\.|…)[\s\u00a0]*(?:Ещё|See more|הצג עוד)[\s\u00a0]*$/i.test(post.text||'');
   const missingAuthor=!post.author?.display_name;
   const missingDate=!post.posted_at;
