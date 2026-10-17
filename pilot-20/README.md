@@ -11,6 +11,8 @@ This is a separate Chrome extension based on Collector 2.8.1 at `8422af15e2e4a7c
 
 `Load 20` reads `archive.collector_batches` from Supabase and chooses the oldest 20 records with `raw_metadata.needs_enrichment=true`, a numeric Facebook post ID, and no Collector 2.8.x batch. Loading a new queue resets the local journal, so export or copy it first if needed. The bridge uses the existing `archive_ingest_batch` RPC. Before any write it re-reads the original batch, checks identity and text, merges old and new comments/media/authors, forbids a lower comment count, and verifies the saved count. No browser code contains the Supabase service key.
 
+The project's Data API must expose the `archive` schema for the bridge's read requests. If it does not, queue loading fails closed; enable access through an approved server-side API before running the pilot. The existing RPC is in `public`.
+
 Statuses are `pending`, `processing`, `enriched`, `partial`, `unavailable`, `failed`, and `skipped_guard`. Stop takes effect before the next Supabase transport and prevents advancing; the already running DOM pass may finish locally. Resume retries the current `processing` post. A suspicious DOM or route yields `skipped_guard` and sends no package.
 
 This pilot has a hard queue limit of 20. Do not broaden it or merge into `main` before reviewing the resulting batches and journal.
