@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Pumpkin Latte Enrichment Pilot",
-  "version": "0.2.0",
-  "description": "Fifty-post enrichment pilot using Collector 2.8.1",
+  "version": "0.2.1",
+  "description": "Fifty-post enrichment pilot with automatic unavailable-post skip",
   "permissions": ["storage", "tabs"],
   "host_permissions": ["https://www.facebook.com/*", "https://ltznpjfnkpydautbsrej.supabase.co/*"],
   "background": {"service_worker": "background.js"},
