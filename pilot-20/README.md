@@ -4,7 +4,9 @@ This isolated extension uses Collector 2.8.1 and calls the new `pumpkin-enrichme
 
 ## Setup
 
-1. Load this directory as an unpacked extension at `chrome://extensions`.
+1. At `chrome://extensions`, select **Load unpacked** and choose the extension-only directory:
+   `C:\Users\731\Documents\Codex\2026-10-17\referenced-chatgpt-conversation-this-is-an\work\pumpkin-latte-collector\pilot-20-extension`
+   The `pilot-20` directory also contains legacy Python and tests; it is not the directory to load in Chrome.
 2. Open a logged-in Facebook tab.
 3. Enter the separate pilot token in the popup, select **Load 20**, then **Start / Resume**. The token is saved in Chrome local extension storage for Resume; treat that browser profile as trusted.
 
@@ -18,4 +20,4 @@ The core checks the URL post ID; structurally selects the active post by exact a
 
 ## Verification
 
-Run `node --check` on the extension JavaScript files and `python -m unittest discover -s tests` for legacy bridge logic. A live run requires the operator's Facebook session; deployment alone does not start a run.
+Run `node --check` on the JavaScript files in `pilot-20-extension` and `python -m unittest discover -s tests` for legacy bridge logic. A live run requires the operator's Facebook session; deployment alone does not start a run.
