@@ -1,9 +1,9 @@
-// Isolated 20-post pilot. The browser only knows a random pilot token; this
+// Isolated 50-post pilot. The browser only knows a random pilot token; this
 // function holds its SHA-256 verifier and reads the service key at runtime.
 const PROJECT = Deno.env.get('SUPABASE_URL') || 'https://ltznpjfnkpydautbsrej.supabase.co';
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 const TOKEN_HASH = '7679d2e31c87a40559bad9d7721fa4675e3b4fb8430c1f166203ef98c1af4e83';
-const LIMIT = 20;
+const LIMIT = 50;
 const cors = {'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'authorization, content-type', 'Cache-Control': 'no-store'};
 
 function response(status, value) {
