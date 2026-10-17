@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Twenty-post enrichment pilot using Collector 2.8.1",
   "permissions": ["storage", "tabs"],
-  "host_permissions": ["https://www.facebook.com/*", "http://127.0.0.1:8765/*"],
+  "host_permissions": ["https://www.facebook.com/*", "https://ltznpjfnkpydautbsrej.supabase.co/*"],
   "background": {"service_worker": "background.js"},
   "content_scripts": [{"matches": ["https://www.facebook.com/*"], "js": ["core.js", "content.js"], "run_at": "document_idle"}],
   "action": {"default_popup": "popup.html"}
