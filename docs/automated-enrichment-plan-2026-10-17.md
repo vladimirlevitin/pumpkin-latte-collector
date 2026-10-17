@@ -34,8 +34,9 @@ Collector repo:
 - main version: pla-fb-archive-v2.6.6-single-sync-window
 - main source sha: 89b8ed93e8d4c37565cc62f61b52abd66aa6c481
 - enrichment branch: fix/collector-enrichment-pilot-v2.6.7
-- branch HEAD: 8422af15e2e4a7c7f92d5eb7d33e24094cb7972c
+- tested 2.8.1 code/build baseline commit: 8422af15e2e4a7c7f92d5eb7d33e24094cb7972c
 - branch version: pla-fb-archive-v2.8.1-incremental-comments
+- later documentation-only commits may move the branch HEAD; use the version string and tested code baseline above to identify the working collector source.
 
 НЕ МЕРЖИТЬ 2.8.1 В MAIN АВТОМАТИЧЕСКИ.
 Main отвечает за обычный пассивный сбор. Enrichment — отдельный режим/инструмент.
