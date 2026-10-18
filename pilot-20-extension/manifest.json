@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Pumpkin Latte Enrichment Pilot",
-  "version": "0.2.2",
-  "description": "Fifty-post enrichment pilot with automatic unavailable-post skip and stall watchdog",
+  "version": "0.2.3",
+  "description": "Fifty-post enrichment pilot with automatic unavailable-post skip, stall watchdog, and safer permalink fallback",
   "permissions": [
     "storage",
     "tabs",
