@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.8.1-incremental-comments';
+const VERSION='pla-fb-archive-v2.8.2-incremental-comments';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -797,12 +797,19 @@ function currentPostSelection(id=currentPagePostId()){
   const best=candidates[0],second=candidates[1];
   if(!best)return null;
 
-  // Diagnostic on the pilot showed the correct opened post is the outer article
-  // that contains many repeated links to the same post plus nested comment articles.
-  // A background/feed card normally has only one such link.
+  // Primary shape: the opened post usually contains repeated links to its own
+  // permalink and nested comment articles. Some Facebook permalink layouts,
+  // however, expose only one exact self-link (and posts with few/no comments can
+  // have no nested article at all). On an exact /posts/ID/ route, allow that
+  // fallback only when the target is still unambiguous among visible outer cards.
   const separated=!second||best.exact>second.exact||best.nested>second.nested+2;
-  const confident=best.exact>=2&&best.nested>=1&&best.chars>=120&&separated;
-  return confident?best:null;
+  const strong=best.exact>=2&&best.nested>=1&&best.chars>=120&&separated;
+  const fallbackSeparated=!second||
+    best.exact>second.exact||
+    best.nested>second.nested||
+    (best.chars>=Math.max(160,second.chars*1.35)&&best.area>=second.area*.7);
+  const permalinkFallback=best.exact>=1&&best.chars>=80&&fallbackSeparated;
+  return (strong||permalinkFallback)?best:null;
 }
 
 function scrollContainerFor(article,root){
@@ -1021,7 +1028,7 @@ async function enrichCurrentPost(){
   const exactNow=exactPostAnchorCount(article,pagePostId);
   const nestedNow=[...article.querySelectorAll?.('[role="article"]')||[]].filter(x=>x!==article).length;
 
-  if(!samePostText||!sameAuthor||exactNow<2||nestedNow<1){
+  if(!samePostText||!sameAuthor||exactNow<1){
     render('Обогащение остановлено защитой: идентичность поста изменилась. Ничего не сохранено.');
     return {ok:false,error:'identity_guard_failed',samePostText,sameAuthor,exactNow,nestedNow};
   }
