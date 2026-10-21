@@ -665,7 +665,7 @@ function queueSyncPost(postKey,force=false){
 
 async function retryLocalPendingSync(){
   const posts=await getAll('posts');
-  const waiting=posts.filter(p=>syncablePostKey(p.key)&&p.sync_status!=='synced'&&p.sync_status!=='submitted');
+  const waiting=posts.filter(p=>syncablePostKey(p.key)&&p.sync_status!=='synced');
   for(const p of waiting)queueSyncPost(p.key);
 }
 async function syncAllLocal(){
@@ -1100,7 +1100,8 @@ async function processArticle(article){
   lastSavedAt=nowIso();
   await saveCrawlState({checkpoint:{post_key:post.key,facebook_post_id:post.facebook_post_id,posted_at:post.posted_at,canonical_url:post.canonical_url,saved_at:lastSavedAt}});
   await refreshDbCounts();
-  queueSyncPost(post.key);
+  const localPost=await getOne('posts',post.key);
+  if(result.postStatus!=='unchanged'||localPost?.sync_status!=='synced')queueSyncPost(post.key);
   return {post,result};
 }
 
