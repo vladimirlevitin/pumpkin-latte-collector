@@ -18,7 +18,7 @@ chrome.alarms.onAlarm.addListener(async a=>{
   try{
     const result=await chrome.tabs.sendMessage(tab.id,{type:'heartbeat'});
     s.last_pulse=new Date().toISOString();s.updated_at=s.last_pulse;
-    if(result?.ready){s.status=result.running?'running':'idle';s.last_error=null;}
+    if(result?.ready){s.status=result.running?'running':'idle';s.last_error=null;s.last_stats=result.stats||null;}
     await save(s);
   }catch(e){
     s.status='waiting_for_page';
