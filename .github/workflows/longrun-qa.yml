@@ -1,0 +1,46 @@
+name: Long-run collector checks and download
+on:
+  push:
+    branches:
+      - feature/longrun-feed-collector-v1
+    paths:
+      - "longrun-extension/**"
+      - "tests/longrun-contract.test.cjs"
+      - ".github/workflows/longrun-qa.yml"
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  validate-and-zip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: JavaScript syntax
+        run: |
+          node --check longrun-extension/core.js
+          node --check longrun-extension/background.js
+          node --check longrun-extension/content.js
+          node --check longrun-extension/popup.js
+      - name: Manifest and contract tests
+        run: |
+          node -e "const x=require('./longrun-extension/manifest.json');if(x.manifest_version!==3||x.background.service_worker!=='background.js')process.exit(1)"
+          node --test tests/longrun-contract.test.cjs
+      - name: Build installable zip
+        run: |
+          mkdir -p downloads
+          cd longrun-extension
+          zip -q -r ../downloads/pumpkin-latte-longrun-v0.1.0.zip manifest.json background.js content.js core.js popup.html popup.js
+      - name: Upload zip to CI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pumpkin-latte-longrun-v0.1.0
+          path: downloads/pumpkin-latte-longrun-v0.1.0.zip
+      - name: Publish zip on this branch only
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add downloads/pumpkin-latte-longrun-v0.1.0.zip
+          if ! git diff --cached --quiet; then
+            git commit -m "Add tested collector installation ZIP"
+            git push
+          fi
