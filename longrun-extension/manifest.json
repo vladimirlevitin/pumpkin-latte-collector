@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Pumpkin Latte - Long-run Feed Collector",
+  "version": "0.1.0",
+  "description": "Resumable collection of rendered posts in Pumpkin Latte with Supabase sync and progress checkpoints.",
+  "permissions": [
+    "storage",
+    "alarms",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://www.facebook.com/*",
+    "https://ltznpjfnkpydautbsrej.supabase.co/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.facebook.com/groups/pumpkinlatte*"
+      ],
+      "js": [
+        "core.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
