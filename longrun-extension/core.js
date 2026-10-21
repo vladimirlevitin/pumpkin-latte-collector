@@ -705,7 +705,7 @@ async function addError(data){try{await reqPromise((await txStore('errors','read
 
 const stats={posts_seen:0,posts_new:0,posts_updated:0,comments_seen:0,comments_new:0,comments_updated:0,media_seen:0,media_new:0,errors:0,comments_incomplete:0};
 let running=false,timer=null,targetNew=100,seenSession=new Set(),emptyScans=0,watchdog=null,syncWin=null,syncQueue=[],syncQueuedKeys=new Set(),syncBusy=false,syncSubmitted=0;
-const failedPosts=new Map(),syncRetries=new Map();let idleSince=0;
+const failedPosts=new Map(),syncRetries=new Map();let idleSince=0,seenProgress=0,heightProgress=0;
 
 async function saveCrawlState(extra={}){
   const state={key:STATE_KEY,collector_version:VERSION,schema_version:SCHEMA_VERSION,group:GROUP_PATH,page_url:location.href,updated_at:nowIso(),stats:{...stats},...extra};
@@ -1123,16 +1123,17 @@ async function tick(){
     const found=await scanVisible();
     if(!running)return;
     if(stats.posts_new>=targetNew){stop('✓ Набрано '+targetNew+' новых постов');return;}
-    if(!found){
-      emptyScans++;
-      if(!idleSince)idleSince=Date.now();
-      if(Date.now()-idleSince>15*60*1000){stop('Пауза: новых постов нет 15 минут. Прогресс сохранён.');return;}
-      timer=setTimeout(tick,Math.min(30000,3000+emptyScans*3000));
+    const height=document.documentElement?.scrollHeight||0;
+    const progressed=stats.posts_seen>seenProgress||height>heightProgress+150;
+    if(progressed){seenProgress=stats.posts_seen;heightProgress=height;idleSince=0;emptyScans=0;}
+    else{emptyScans++;if(!idleSince)idleSince=Date.now();}
+    if(idleSince&&Date.now()-idleSince>15*60*1000){
+      stop('Пауза: новых постов нет 15 минут. Прогресс сохранён.');
       return;
     }
-    emptyScans=0;idleSince=0;
+    if(!found){timer=setTimeout(tick,Math.min(30000,3000+emptyScans*3000));return;}
     scrollBy(0,Math.min(350,Math.max(220,innerHeight*.28)));
-    timer=setTimeout(tick,2800);
+    timer=setTimeout(tick,progressed?2800:Math.min(30000,3000+emptyScans*1500));
   }catch(e){
     stats.errors++;
     await addError({stage:'tick',message:String(e?.stack||e)}).catch(()=>{});
