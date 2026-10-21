@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Pumpkin Latte - Long-run Feed Collector",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Resumable collection of rendered posts in Pumpkin Latte with Supabase sync and progress checkpoints.",
   "permissions": [
     "storage",

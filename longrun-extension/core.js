@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.8.3-longrun';
+const VERSION='pla-fb-archive-v2.8.4-longrun';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -501,16 +501,25 @@ async function expandComments(article,maxCycles=MAX_EXPAND_CYCLES,maxClicksPerCy
   return {totalClicks,complete:article?.isConnected?remainingExpandControls(article).length===0:false};
 }
 
+let dbPromise=null;
 function openDb(){
-  return new Promise((resolve,reject)=>{
+  if(dbPromise)return dbPromise;
+  dbPromise=new Promise((resolve,reject)=>{
     const req=indexedDB.open(DB_NAME,DB_VERSION);
     req.onupgradeneeded=()=>{
       const db=req.result;
       for(const name of ['posts','comments','media','authors','crawl_state'])if(!db.objectStoreNames.contains(name))db.createObjectStore(name,{keyPath:'key'});
       if(!db.objectStoreNames.contains('errors'))db.createObjectStore('errors',{keyPath:'id',autoIncrement:true});
     };
-    req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
+    req.onsuccess=()=>{
+      const db=req.result;
+      db.onversionchange=()=>{db.close();dbPromise=null;};
+      db.onclose=()=>{dbPromise=null;};
+      resolve(db);
+    };
+    req.onerror=()=>{dbPromise=null;reject(req.error);};
   });
+  return dbPromise;
 }
 
 async function txStore(name,mode='readonly'){
@@ -620,39 +629,49 @@ async function submitPayloadsAndWait(payloads){
 async function drainSyncQueue(){
   if(syncBusy)return;
   syncBusy=true;
-  while(syncQueue.length){
-    const keys=syncQueue.splice(0,20);
-    const payloads=[];
-    const validKeys=[];
-    for(const postKey of keys){
-      await markSyncStatus(postKey,'sending');
-      const payload=await buildSyncPayload(postKey);
-      if(payload){payloads.push(payload);validKeys.push(postKey);}
-      else await markSyncStatus(postKey,'local_only','no_facebook_post_id');
-    }
-    if(!payloads.length)continue;
-
-    const result=await submitPayloadsAndWait(payloads);
-    if(result.ok){
-      syncSubmitted+=validKeys.length;
-      for(const postKey of validKeys){
-        await markSyncStatus(postKey,result.confirmed?'synced':'submitted',result.confirmed?'':'awaiting_confirmation');
-        syncRetries.delete(postKey);syncQueuedKeys.delete(postKey);
+  let inFlight=[];
+  try{
+    while(syncQueue.length){
+      const keys=syncQueue.splice(0,20);
+      inFlight=keys;
+      const payloads=[],validKeys=[];
+      for(const postKey of keys){
+        await markSyncStatus(postKey,'sending');
+        const payload=await buildSyncPayload(postKey);
+        if(payload){payloads.push(payload);validKeys.push(postKey);}
+        else{await markSyncStatus(postKey,'local_only','no_facebook_post_id');syncQueuedKeys.delete(postKey);}
       }
-    }else{
-      syncFailed+=validKeys.length;
-      for(const postKey of validKeys){
-        await markSyncStatus(postKey,'pending',result.error||'sync_failed');
-        const n=(syncRetries.get(postKey)||0)+1;syncRetries.set(postKey,n);
-        if(n<4){syncQueue.push(postKey);await sleep(Math.min(20000,3000*n));}
-        else syncQueuedKeys.delete(postKey);
+      if(!payloads.length){inFlight=[];continue;}
+      const result=await submitPayloadsAndWait(payloads);
+      if(result.ok){
+        syncSubmitted+=validKeys.length;
+        for(const postKey of validKeys){
+          await markSyncStatus(postKey,'synced');
+          syncRetries.delete(postKey);syncQueuedKeys.delete(postKey);
+        }
+      }else{
+        syncFailed+=validKeys.length;
+        for(const postKey of validKeys){
+          await markSyncStatus(postKey,'pending',result.error||'sync_failed');
+          const n=(syncRetries.get(postKey)||0)+1;
+          syncRetries.set(postKey,n);
+          if(n<4){syncQueue.push(postKey);await sleep(Math.min(20000,3000*n));}
+          else syncQueuedKeys.delete(postKey);
+        }
       }
+      inFlight=[];
+      render(result.ok?'Supabase: пакет подтверждён':'Supabase: ошибка отправки, повтор позже');
+      await sleep(400);
     }
-    render(result.ok?(result.confirmed?'Supabase: пакет сохранён':'Supabase: пакет отправлен'):'Supabase: повторим пакет позже');
-    await sleep(400);
+  }catch(error){
+    stats.errors++;
+    await addError({stage:'sync_queue',message:String(error?.stack||error)}).catch(()=>{});
+    for(const key of inFlight)if(!syncQueue.includes(key))syncQueue.unshift(key);
+  }finally{
+    syncBusy=false;
+    render();
+    if(syncQueue.length)setTimeout(()=>{void drainSyncQueue().catch(()=>{});},30000);
   }
-  syncBusy=false;
-  render();
 }
 
 function queueSyncPost(postKey,force=false){
@@ -660,7 +679,7 @@ function queueSyncPost(postKey,force=false){
   if(!force&&syncQueuedKeys.has(postKey))return;
   syncQueuedKeys.add(postKey);
   syncQueue.push(postKey);
-  void drainSyncQueue();
+  void drainSyncQueue().catch(error=>console.error('PLA sync queue',error));
 }
 
 async function retryLocalPendingSync(){
@@ -704,7 +723,7 @@ async function persistBundle(post,comments,media){
 async function addError(data){try{await reqPromise((await txStore('errors','readwrite')).add({created_at:nowIso(),...data}))}catch{} }
 
 const stats={posts_seen:0,posts_new:0,posts_updated:0,comments_seen:0,comments_new:0,comments_updated:0,media_seen:0,media_new:0,errors:0,comments_incomplete:0};
-let running=false,timer=null,targetNew=100,seenSession=new Set(),emptyScans=0,watchdog=null,syncWin=null,syncQueue=[],syncQueuedKeys=new Set(),syncBusy=false,syncSubmitted=0;
+let running=false,timer=null,targetNew=100,seenSession=new Set(),emptyScans=0,watchdog=null,syncWin=null,syncQueue=[],syncQueuedKeys=new Set(),syncBusy=false,syncSubmitted=0,syncFailed=0;
 const failedPosts=new Map(),syncRetries=new Map();let idleSince=0,seenProgress=0,heightProgress=0;
 
 async function saveCrawlState(extra={}){
@@ -1110,7 +1129,7 @@ async function scanVisible(){
   for(const a of arts){
     if(!running)break;
     if(!a.isConnected)continue;
-    const failureKey=a.querySelector?.('a[href*="/posts/"]')?.href||a.id||String(arts.indexOf(a));
+    const failureKey=a.querySelector?.('a[href*="/posts/"]')?.href||a.id||('preview:'+text(a).slice(0,250));
     if((failedPosts.get(failureKey)||0)>=3)continue;
     try{await processArticle(a);failedPosts.delete(failureKey)}catch(err){failedPosts.set(failureKey,(failedPosts.get(failureKey)||0)+1);stats.errors++;await addError({stage:'processArticle',message:String(err?.stack||err)}).catch(()=>{});}
   }
@@ -1144,10 +1163,11 @@ async function tick(){
 
 function start(){
   if(running)return;
-  targetNew=Math.max(1,Math.min(50000,Number(countInput.value)||5000));
+  targetNew=stats.posts_new+Math.max(1,Math.min(50000,Number(countInput.value)||5000));
   emptyScans=0;idleSince=0;
   void retryLocalPendingSync().catch(()=>{});
   running=true;
+  panel.style.display='block';
   render('Собираю…');
   tick();
 }
@@ -1228,7 +1248,7 @@ async function refreshUi(){
 }
 window.__PLA_FB_ARCHIVE={panel,start,stop,scan:scanVisible,enrichCurrentPost,exportJson,selfTest,syncAll:syncAllLocal,buildSyncPayload,version:VERSION,dbName:DB_NAME,stats,refresh:refreshUi,isRunning:()=>running};
 watchdog=setInterval(async()=>{
-  if(!panel.isConnected&&document.body)document.body.appendChild(panel);panel.style.display='none';
+  if(!panel.isConnected&&document.body)document.body.appendChild(panel);
   if(running){try{await refreshDbCounts();}catch{};render('Собираю…');}
 },2000);
 refreshDbCounts().then(()=>render('Готов к запуску')).catch(()=>render('Готов к запуску'));

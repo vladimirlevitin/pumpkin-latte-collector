@@ -47,3 +47,27 @@ test('no backend service role credential or disabled authentication',()=>{
  assert.doesNotMatch(source,/SERVICE_ROLE_KEY/);
  assert.match(source,/PUBLISHABLE_KEY/);
 });
+
+
+test('sync failures counter initialized and queue is recoverable',()=>{
+ const s=read('core.js');
+ assert.match(s,/syncSubmitted=0,syncFailed=0/);
+ assert.match(s,/async function drainSyncQueue\(\)/);
+ assert.match(s,/finally\{[\s\S]*syncBusy=false;/);
+ assert.match(s,/stage:'sync_queue'/);
+});
+test('IndexedDB connection is cached for long sessions',()=>{
+ const s=read('core.js');
+ assert.match(s,/let dbPromise=null;/);
+ assert.match(s,/if\(dbPromise\)return dbPromise;/);
+ assert.match(s,/db\.onversionchange/);
+});
+test('resuming does not instantly exhaust the target',()=>{
+ const s=read('core.js');
+ assert.match(s,/targetNew=stats\.posts_new\+Math\.max/);
+});
+test('watchdog does not hide the active panel',()=>{
+ const s=read('core.js');
+ assert.match(s,/panel\.style\.display='block';/);
+ assert.doesNotMatch(s,/document\.body\.appendChild\(panel\);panel\.style\.display='none'/);
+});

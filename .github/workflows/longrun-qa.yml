@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - feature/longrun-feed-collector-v1
+      - fix/longrun-feed-collector-v0.1.1
     paths:
       - "longrun-extension/**"
       - "tests/longrun-contract.test.cjs"
@@ -29,17 +30,17 @@ jobs:
         run: |
           mkdir -p downloads
           cd longrun-extension
-          zip -q -r ../downloads/pumpkin-latte-longrun-v0.1.0.zip manifest.json background.js content.js core.js popup.html popup.js
+          zip -q -r ../downloads/pumpkin-latte-longrun-v0.1.1.zip manifest.json background.js content.js core.js popup.html popup.js
       - name: Upload zip to CI artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pumpkin-latte-longrun-v0.1.0
-          path: downloads/pumpkin-latte-longrun-v0.1.0.zip
+          name: pumpkin-latte-longrun-v0.1.1
+          path: downloads/pumpkin-latte-longrun-v0.1.1.zip
       - name: Publish zip on this branch only
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add downloads/pumpkin-latte-longrun-v0.1.0.zip
+          git add downloads/pumpkin-latte-longrun-v0.1.1.zip
           if ! git diff --cached --quiet; then
             git commit -m "Add tested collector installation ZIP"
             git push
