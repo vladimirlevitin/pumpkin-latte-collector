@@ -33,5 +33,7 @@ setInterval(async()=>{
   if(!everStarted)return;
   if(core()?.isRunning?.())return;
   everStarted=false;
-  try{await chrome.runtime.sendMessage({type:'coreStopped'});}catch{}
+  const c=core();
+  const reason=String(c?.stopReason?.()||'');
+  try{await chrome.runtime.sendMessage({type:'coreStopped',stats:c?.stats||null,completed:reason.startsWith('✓ Набрано')});}catch{}
 },15000);
