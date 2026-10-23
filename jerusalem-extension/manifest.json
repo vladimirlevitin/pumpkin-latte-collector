@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Иерусалим по-русски — коллектор ленты",
+  "version": "0.1.0",
+  "description": "Изолированный локальный сбор видимых публикаций и комментариев группы Иерусалим по-русски. Supabase отключена.",
+  "permissions": [
+    "storage",
+    "alarms",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://www.facebook.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.facebook.com/groups/374040476267868*"
+      ],
+      "js": [
+        "core.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
