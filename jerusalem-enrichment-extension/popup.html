@@ -1,0 +1,13 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><style>
+body{font:14px/1.45 system-ui,Arial;width:360px;padding:14px;background:#f6fafc;color:#183143}
+h2{font-size:18px;margin:0}p{color:#526677;margin:5px 0 12px}label{display:block;margin-top:10px}
+button,select,input{font:inherit;padding:8px;border:1px solid #9cbbc9;border-radius:6px;background:white}
+button{cursor:pointer}select{width:100%}input{max-width:335px}button.primary{background:#086cc9;color:white}
+.actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}pre{max-height:250px;overflow:auto;white-space:pre-wrap;padding:9px;background:white;border:1px solid #ddd;font:12px/1.45 monospace}
+#note{color:#925000;font-size:12px;margin:9px 0}footer{font-size:11px;color:#526677}</style></head>
+<body><h2>Иерусалим · досборщик</h2><p>Только группа 374040476267868 · v0.1.0</p>
+<label>JSON из основного коллектора</label><input id="file" type="file" accept=".json,application/json">
+<label>Число постов</label><select id="count"><option value="20">20 — первый тест</option><option value="50">50</option></select>
+<div class="actions"><button id="load">Загрузить</button><button class="primary" id="start">Старт / продолжить</button><button id="stop">Стоп</button></div>
+<div class="actions"><button id="report">Скачать отчёт</button></div><div id="note" role="status"></div><pre id="status">...</pre>
+<footer>Собирает только видимые материалы, не обращается к Supabase. Не запускайте одновременно со сбором ленты.</footer><script src="popup.js"></script></body></html>
