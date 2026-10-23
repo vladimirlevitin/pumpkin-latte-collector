@@ -48,7 +48,12 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
       return {ok:true,...s};
     }
     if(message.type==='coreStopped'){
-      if(s.running){s.running=false;s.status='paused_by_collector';s.updated_at=new Date().toISOString();await save(s);}
+      if(message.stats)s.last_stats=message.stats;
+      if(s.running){
+        s.running=false;
+        s.status=message.completed?'completed':'paused_by_collector';
+      }
+      s.updated_at=new Date().toISOString();await save(s);
       return {ok:true};
     }
     return {error:'unknown_action'};
