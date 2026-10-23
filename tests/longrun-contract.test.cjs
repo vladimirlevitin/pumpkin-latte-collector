@@ -136,3 +136,26 @@ test('passive rescan does not queue existing posts',()=>{
  assert.match(source,/if\(result\.postStatus==='new'\)queueSyncPost\(post\.key\)/);
  assert.doesNotMatch(source,/result\.postStatus!=='unchanged'\|\|localPost\?\.sync_status/);
 });
+
+test('v0.1.2 explicitly disables unsafe Supabase writes until backend guard',()=>{
+ const s=read('core.js');
+ assert.match(s,/const SERVER_SAFE_INGEST_READY=false;/);
+ assert.match(s,/if\(!SERVER_SAFE_INGEST_READY\)return \{ok:false,paused:true\}/);
+ assert.match(s,/if\(!SERVER_SAFE_INGEST_READY\|\|syncBusy\|\|syncPaused\)return/);
+ assert.match(s,/syncPaused=!SERVER_SAFE_INGEST_READY/);
+});
+test('partial Facebook posts cannot erase richer local text or complete status',async()=>{
+ const vm=require('node:vm'),s=read('core.js');
+ const code=s.slice(s.indexOf('async function upsertRecord('),s.indexOf('async function persistBundle('));
+ const map=new Map([['posts:old',{key:'old',text:'a full useful text',comments_complete:true,posted_at:'2026-10-01',safe_sync_new_only:false}]]);
+ const ctx={VERSION:'test',nowIso:()=>new Date(0).toISOString(),
+   getOne:async(t,k)=>map.get(t+':'+k)||null,
+   putOne:async(t,v)=>{map.set(t+':'+v.key,v);}};
+ vm.runInNewContext(code+';globalThis.upsert=upsertRecord;',ctx);
+ await ctx.upsert('posts',{key:'old',text:'a',comments_complete:false,posted_at:null});
+ const updated=map.get('posts:old');
+ assert.equal(updated.text,'a full useful text');
+ assert.equal(updated.comments_complete,true);
+ assert.equal(updated.posted_at,'2026-10-01');
+ assert.notEqual(updated.safe_sync_new_only,true);
+});

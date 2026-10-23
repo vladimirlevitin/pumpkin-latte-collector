@@ -13,6 +13,8 @@ const MAX_CLICKS_PER_CYCLE=2;
 const ACTION_DELAY_MS=450;
 const INGEST_URL='https://ltznpjfnkpydautbsrej.supabase.co/functions/v1/collector-ingest';
 const PUBLISHABLE_KEY='sb_publishable_tHMD6sI6e5BS9WOqFAeG1A_jFs6ta6d';
+// TEMPORARY HARD SAFETY FENCE. Enable only after insert-only backend is reviewed/deployed.
+const SERVER_SAFE_INGEST_READY=false;
 const COLLECTOR_ID_KEY='pla_collector_id';
 
 if(window.__PLA_FB_ARCHIVE?.panel){
@@ -612,6 +614,8 @@ async function markSyncStatus(postKey,statusValue,error=''){
 }
 
 async function submitPayloadsAndWait(payloads,epoch){
+  // No writes of any kind until the server's append-only guard is deployed.
+  if(!SERVER_SAFE_INGEST_READY)return {ok:false,paused:true};
   // Stop aborts in-flight fetch and prevents any further network retries.
   for(let attempt=1;attempt<=3;attempt++){
     if(syncPaused||epoch!==syncEpoch)return {ok:false,paused:true};
@@ -643,7 +647,7 @@ async function submitPayloadsAndWait(payloads,epoch){
   return {ok:false,error:'transient_upload_failure'};
 }
 async function drainSyncQueue(){
-  if(syncBusy||syncPaused)return;
+  if(!SERVER_SAFE_INGEST_READY||syncBusy||syncPaused)return;
   syncBusy=true;
   const epoch=syncEpoch;
   let inFlight=[],hadUnexpectedError=false;
@@ -719,6 +723,8 @@ async function retryLocalPendingSync(){
 }
 
 async function syncAllLocal(){
+  // Explicit server guard: even manual clicking cannot turn on writes.
+  if(!SERVER_SAFE_INGEST_READY){render('Запись в Supabase отключена до защиты сервера');return;}
   // Manual button also retries only new, explicitly marked records.
   if(syncBusy){render('Синхронизация новых записей уже идёт');return;}
   syncPaused=false;syncEpoch++;
@@ -740,9 +746,20 @@ async function upsertRecord(store,row){
     if(store==='posts')row={...row,safe_sync_new_only:true,safe_sync_origin:VERSION};
     await putOne(store,row);return 'new';
   }
-  if(prev.content_hash&&row.content_hash&&prev.content_hash===row.content_hash){await putOne(store,{...prev,...row,first_seen_at:prev.first_seen_at||row.first_seen_at,last_seen_at:nowIso(),comments_complete:row.comments_complete??prev.comments_complete});return 'unchanged';}
-  await putOne(store,{...prev,...row,first_seen_at:prev.first_seen_at||row.first_seen_at,last_seen_at:nowIso()});
-  return 'updated';
+  const merged={...prev,...row,first_seen_at:prev.first_seen_at||row.first_seen_at,last_seen_at:nowIso()};
+  // A partial Facebook DOM capture may not replace richer local text or identity.
+  if(store==='posts'||store==='comments'){
+    if(String(prev.text||'').trim().length>String(row.text||'').trim().length)merged.text=prev.text;
+    if(!row.posted_at&&prev.posted_at)merged.posted_at=prev.posted_at;
+    if(!row.commented_at&&prev.commented_at)merged.commented_at=prev.commented_at;
+    if(store==='posts'){
+      merged.comments_complete=Boolean(prev.comments_complete||row.comments_complete);
+      if(!row.canonical_url&&prev.canonical_url)merged.canonical_url=prev.canonical_url;
+      if(!row.facebook_post_id&&prev.facebook_post_id)merged.facebook_post_id=prev.facebook_post_id;
+    }
+  }
+  await putOne(store,merged);
+  return prev.content_hash&&row.content_hash&&prev.content_hash===row.content_hash?'unchanged':'updated';
 }
 
 async function persistBundle(post,comments,media){
@@ -1201,8 +1218,9 @@ function start(){
   if(running)return;
   targetNew=stats.posts_new+Math.max(1,Math.min(50000,Number(countInput.value)||5000));
   emptyScans=0;idleSince=0;
-  syncPaused=false;syncEpoch++;
-  void retryLocalPendingSync().catch(error=>console.error('PLA new-only retry',error));
+  syncPaused=!SERVER_SAFE_INGEST_READY;syncEpoch++;
+  if(SERVER_SAFE_INGEST_READY)
+    void retryLocalPendingSync().catch(error=>console.error('PLA new-only retry',error));
   running=true;
   panel.style.display='block';
   render('Собираю…');
@@ -1275,7 +1293,7 @@ async function selfTest(){
 
 function render(msg=''){
   if(!status)return;
-  status.innerHTML=(msg?`<b>${esc(msg)}</b><br>`:'')+`Статус: <b>${running?'РАБОТАЕТ':'ОСТАНОВЛЕН'}</b><br>В базе: посты <b>${dbCounts.posts}</b> · комментарии <b>${dbCounts.comments}</b> · медиа <b>${dbCounts.media}</b> · авторы <b>${dbCounts.authors}</b> · ошибки <b>${dbCounts.errors}</b><br>Постов просмотрено сейчас: <b>${stats.posts_seen}</b><br>Новых: <b>${stats.posts_new}</b> · обновлённых: <b>${stats.posts_updated}</b><br>Комментариев сейчас: <b>${stats.comments_seen}</b> · новых: <b>${stats.comments_new}</b><br>Неполные комментарии: <b>${stats.comments_incomplete}</b><br>Supabase (только новые): подтверждено <b>${syncSubmitted}</b> · очередь <b>${syncQueue.length}</b> · ошибки <b>${syncFailed}</b> · отправка <b>${syncPaused?'остановлена':'разрешена'}</b><br>Исключено старых неподтверждённых: <b>${excludedLegacyPending}</b><br>Последнее сохранение: <b>${lastSavedAt?new Date(lastSavedAt).toLocaleTimeString():'—'}</b>`;
+  status.innerHTML=(msg?`<b>${esc(msg)}</b><br>`:'')+`Статус: <b>${running?'РАБОТАЕТ':'ОСТАНОВЛЕН'}</b><br>В базе: посты <b>${dbCounts.posts}</b> · комментарии <b>${dbCounts.comments}</b> · медиа <b>${dbCounts.media}</b> · авторы <b>${dbCounts.authors}</b> · ошибки <b>${dbCounts.errors}</b><br>Постов просмотрено сейчас: <b>${stats.posts_seen}</b><br>Новых: <b>${stats.posts_new}</b> · обновлённых: <b>${stats.posts_updated}</b><br>Комментариев сейчас: <b>${stats.comments_seen}</b> · новых: <b>${stats.comments_new}</b><br>Неполные комментарии: <b>${stats.comments_incomplete}</b><br>Supabase <b>${SERVER_SAFE_INGEST_READY?'(только новые)':'ЗАПИСЬ ОТКЛЮЧЕНА — локальный сбор'}</b>: подтверждено <b>${syncSubmitted}</b> · очередь <b>${syncQueue.length}</b> · ошибки <b>${syncFailed}</b> · отправка <b>${syncPaused?'остановлена':'разрешена'}</b><br>Исключено старых неподтверждённых: <b>${excludedLegacyPending}</b><br>Последнее сохранение: <b>${lastSavedAt?new Date(lastSavedAt).toLocaleTimeString():'—'}</b>`;
 }
 
 const panel=document.createElement('div');panel.id=UI_ID;panel.style='position:fixed;top:12px;right:12px;width:400px;max-height:92vh;overflow:auto;z-index:2147483647;background:#fff;color:#111;border:2px solid #1877f2;border-radius:12px;padding:14px;font:16px/1.4 Arial,sans-serif;box-shadow:0 4px 20px #0005';
