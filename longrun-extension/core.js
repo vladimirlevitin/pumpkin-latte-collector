@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='pla-fb-archive-v2.8.4-longrun';
+const VERSION='pla-fb-archive-v2.8.5-longrun-safe';
 const SCHEMA_VERSION=2;
 const DB_NAME='pumpkin_latte_archive';
 const DB_VERSION=1;
@@ -531,12 +531,15 @@ async function putOne(store,value){return reqPromise((await txStore(store,'readw
 async function getAll(store){return reqPromise((await txStore(store)).getAll());}
 async function clearStore(store){return reqPromise((await txStore(store,'readwrite')).clear());}
 async function countStore(store){return reqPromise((await txStore(store)).count());}
-let dbCounts={posts:0,comments:0,media:0,authors:0,errors:0};
+let dbCounts={posts:0,comments:0,media:0,authors:0};
+let excludedLegacyPending=0;
 let lastSavedAt=null;
 async function refreshDbCounts(){
   const names=['posts','comments','media','authors','errors'];
   const values=await Promise.all(names.map(countStore));
   dbCounts=Object.fromEntries(names.map((n,i)=>[n,values[i]]));
+  const rows=await getAll('posts');
+  excludedLegacyPending=rows.filter(p=>p.safe_sync_new_only!==true&&p.sync_status!=='synced').length;
   return dbCounts;
 }
 
@@ -579,7 +582,7 @@ function syncWindowStatus(message){
 
 async function buildSyncPayload(postKey){
   const post=await getOne('posts',postKey);
-  if(!post||!syncablePostKey(post.key))return null;
+  if(!post||!syncablePostKey(post.key)||post.safe_sync_new_only!==true)return null;
   const canonical=/^fb:pumpkinlatte:post:[0-9]+$/.test(post.key);
   if(canonical&&!post.facebook_post_id)return null;
   const [allComments,allMedia,allAuthors]=await Promise.all([getAll('comments'),getAll('media'),getAll('authors')]);
@@ -604,45 +607,71 @@ async function buildSyncPayload(postKey){
 
 async function markSyncStatus(postKey,statusValue,error=''){
   const post=await getOne('posts',postKey);
-  if(!post)return;
+  if(!post||post.safe_sync_new_only!==true)return;
   await putOne('posts',{...post,sync_status:statusValue,sync_error:error||null,synced_at:statusValue==='synced'?nowIso():(post.synced_at||null)});
 }
 
-async function submitPayloadsAndWait(payloads){
-  // No popup: direct confirmed JSON ingestion with public publishable key.
+async function submitPayloadsAndWait(payloads,epoch){
+  // Stop aborts in-flight fetch and prevents any further network retries.
   for(let attempt=1;attempt<=3;attempt++){
+    if(syncPaused||epoch!==syncEpoch)return {ok:false,paused:true};
     const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),30000);
+    activeSyncController=controller;
     try{
-      const res=await fetch(INGEST_URL,{method:'POST',headers:{'content-type':'application/json','apikey':PUBLISHABLE_KEY},
-        body:JSON.stringify({api_key:PUBLISHABLE_KEY,payloads}),signal:controller.signal});
+      const res=await fetch(INGEST_URL,{
+        method:'POST',
+        headers:{'content-type':'application/json','apikey':PUBLISHABLE_KEY},
+        body:JSON.stringify({api_key:PUBLISHABLE_KEY,payloads}),
+        signal:controller.signal
+      });
       const body=await res.json();
-      if(res.ok&&body.ok&&body.saved===payloads.length)return {ok:true,confirmed:true,saved:body.saved};
+      if(syncPaused||epoch!==syncEpoch)return {ok:false,paused:true};
+      if(res.ok&&body.ok===true&&body.saved===payloads.length)
+        return {ok:true,confirmed:true,saved:body.saved};
       if(![429,500,502,503,504].includes(res.status))
         return {ok:false,error:'server '+res.status+': '+JSON.stringify(body).slice(0,180)};
-    }catch(e){if(attempt===3)return {ok:false,error:String(e)};}
-    finally{clearTimeout(timeout);}
+    }catch(e){
+      if(syncPaused||epoch!==syncEpoch)return {ok:false,paused:true};
+      if(attempt===3)return {ok:false,error:String(e)};
+    }finally{
+      clearTimeout(timeout);
+      if(activeSyncController===controller)activeSyncController=null;
+    }
+    if(syncPaused||epoch!==syncEpoch)return {ok:false,paused:true};
     await sleep(1500*Math.pow(2,attempt-1));
   }
   return {ok:false,error:'transient_upload_failure'};
 }
-
 async function drainSyncQueue(){
-  if(syncBusy)return;
+  if(syncBusy||syncPaused)return;
   syncBusy=true;
-  let inFlight=[];
+  const epoch=syncEpoch;
+  let inFlight=[],hadUnexpectedError=false;
   try{
-    while(syncQueue.length){
-      const keys=syncQueue.splice(0,20);
+    while(syncQueue.length&&!syncPaused&&epoch===syncEpoch){
+      const keys=syncQueue.splice(0,5);
       inFlight=keys;
       const payloads=[],validKeys=[];
       for(const postKey of keys){
-        await markSyncStatus(postKey,'sending');
         const payload=await buildSyncPayload(postKey);
-        if(payload){payloads.push(payload);validKeys.push(postKey);}
-        else{await markSyncStatus(postKey,'local_only','no_facebook_post_id');syncQueuedKeys.delete(postKey);}
+        if(payload){
+          await markSyncStatus(postKey,'sending');
+          payloads.push(payload);validKeys.push(postKey);
+        }else{
+          // Old unmarked records are not eligible for any upload.
+          syncQueuedKeys.delete(postKey);
+        }
       }
       if(!payloads.length){inFlight=[];continue;}
-      const result=await submitPayloadsAndWait(payloads);
+      const wasStopped=()=>syncPaused||epoch!==syncEpoch;
+      const result=wasStopped()?{ok:false,paused:true}:await submitPayloadsAndWait(payloads,epoch);
+      if(result.paused||wasStopped()){
+        for(const postKey of validKeys){
+          await markSyncStatus(postKey,'pending','paused_or_unconfirmed');
+          if(!syncQueue.includes(postKey))syncQueue.unshift(postKey);
+        }
+        inFlight=[];break;
+      }
       if(result.ok){
         syncSubmitted+=validKeys.length;
         for(const postKey of validKeys){
@@ -655,43 +684,47 @@ async function drainSyncQueue(){
           await markSyncStatus(postKey,'pending',result.error||'sync_failed');
           const n=(syncRetries.get(postKey)||0)+1;
           syncRetries.set(postKey,n);
-          if(n<4){syncQueue.push(postKey);await sleep(Math.min(20000,3000*n));}
+          if(n<4)syncQueue.push(postKey);
           else syncQueuedKeys.delete(postKey);
         }
       }
       inFlight=[];
-      render(result.ok?'Supabase: пакет подтверждён':'Supabase: ошибка отправки, повтор позже');
-      await sleep(400);
+      render(result.ok?'Supabase: подтверждён новый пакет':'Supabase: новые записи ждут повторной отправки');
+      if(!syncPaused)await sleep(400);
     }
   }catch(error){
-    stats.errors++;
+    hadUnexpectedError=true;stats.errors++;
     await addError({stage:'sync_queue',message:String(error?.stack||error)}).catch(()=>{});
-    for(const key of inFlight)if(!syncQueue.includes(key))syncQueue.unshift(key);
+    for(const postKey of inFlight)
+      if(syncQueuedKeys.has(postKey)&&!syncQueue.includes(postKey))syncQueue.unshift(postKey);
   }finally{
-    syncBusy=false;
-    render();
-    if(syncQueue.length)setTimeout(()=>{void drainSyncQueue().catch(()=>{});},30000);
+    syncBusy=false;render();
+    if(syncQueue.length&&!syncPaused)
+      setTimeout(()=>{void drainSyncQueue().catch(()=>{});},hadUnexpectedError?30000:1000);
   }
 }
-
-function queueSyncPost(postKey,force=false){
-  if(!syncablePostKey(postKey))return;
-  if(!force&&syncQueuedKeys.has(postKey))return;
-  syncQueuedKeys.add(postKey);
-  syncQueue.push(postKey);
-  void drainSyncQueue().catch(error=>console.error('PLA sync queue',error));
+function queueSyncPost(postKey){
+  if(!syncablePostKey(postKey)||syncQueuedKeys.has(postKey))return;
+  syncQueuedKeys.add(postKey);syncQueue.push(postKey);
+  if(!syncPaused)void drainSyncQueue().catch(error=>console.error('PLA safe sync queue',error));
 }
 
 async function retryLocalPendingSync(){
+  // Never automatically retry legacy records from the earlier extensions.
   const posts=await getAll('posts');
-  const waiting=posts.filter(p=>syncablePostKey(p.key)&&p.sync_status!=='synced');
+  const waiting=posts.filter(p=>
+    p.safe_sync_new_only===true&&syncablePostKey(p.key)&&p.sync_status!=='synced'
+  );
   for(const p of waiting)queueSyncPost(p.key);
 }
-async function syncAllLocal(){
-  if(syncBusy){render('Синхронизация уже идёт');return;}
-  await retryLocalPendingSync();
-}
 
+async function syncAllLocal(){
+  // Manual button also retries only new, explicitly marked records.
+  if(syncBusy){render('Синхронизация новых записей уже идёт');return;}
+  syncPaused=false;syncEpoch++;
+  await retryLocalPendingSync();
+  render('Повторяем отправку только новых записей');
+}
 async function persistAuthor(author){
   if(!isPlausibleAuthorRecord(author))return null;
   const basis=author.facebook_author_id||`${GROUP_PATH}|${author.display_name}|${author.profile_url||''}`;
@@ -703,7 +736,10 @@ async function persistAuthor(author){
 
 async function upsertRecord(store,row){
   const prev=await getOne(store,row.key);
-  if(!prev){await putOne(store,row);return 'new';}
+  if(!prev){
+    if(store==='posts')row={...row,safe_sync_new_only:true,safe_sync_origin:VERSION};
+    await putOne(store,row);return 'new';
+  }
   if(prev.content_hash&&row.content_hash&&prev.content_hash===row.content_hash){await putOne(store,{...prev,...row,first_seen_at:prev.first_seen_at||row.first_seen_at,last_seen_at:nowIso(),comments_complete:row.comments_complete??prev.comments_complete});return 'unchanged';}
   await putOne(store,{...prev,...row,first_seen_at:prev.first_seen_at||row.first_seen_at,last_seen_at:nowIso()});
   return 'updated';
@@ -723,7 +759,7 @@ async function persistBundle(post,comments,media){
 async function addError(data){try{await reqPromise((await txStore('errors','readwrite')).add({created_at:nowIso(),...data}))}catch{} }
 
 const stats={posts_seen:0,posts_new:0,posts_updated:0,comments_seen:0,comments_new:0,comments_updated:0,media_seen:0,media_new:0,errors:0,comments_incomplete:0};
-let running=false,timer=null,targetNew=100,seenSession=new Set(),emptyScans=0,watchdog=null,syncWin=null,syncQueue=[],syncQueuedKeys=new Set(),syncBusy=false,syncSubmitted=0,syncFailed=0;
+let running=false,timer=null,targetNew=100,seenSession=new Set(),emptyScans=0,watchdog=null,syncWin=null,syncQueue=[],syncQueuedKeys=new Set(),syncBusy=false,syncSubmitted=0,syncFailed=0,syncPaused=true,syncEpoch=0,activeSyncController=null;
 const failedPosts=new Map(),syncRetries=new Map();let idleSince=0,seenProgress=0,heightProgress=0;
 
 async function saveCrawlState(extra={}){
@@ -1119,8 +1155,8 @@ async function processArticle(article){
   lastSavedAt=nowIso();
   await saveCrawlState({checkpoint:{post_key:post.key,facebook_post_id:post.facebook_post_id,posted_at:post.posted_at,canonical_url:post.canonical_url,saved_at:lastSavedAt}});
   await refreshDbCounts();
-  const localPost=await getOne('posts',post.key);
-  if(result.postStatus!=='unchanged'||localPost?.sync_status!=='synced')queueSyncPost(post.key);
+  // Existing posts are local-only even if marked pending in the old client.
+  if(result.postStatus==='new')queueSyncPost(post.key);
   return {post,result};
 }
 
@@ -1142,7 +1178,7 @@ async function tick(){
   try{
     const found=await scanVisible();
     if(!running)return;
-    if(stats.posts_new>=targetNew){stop('✓ Набрано '+targetNew+' новых постов');return;}
+    if(stats.posts_new>=targetNew){stop('✓ Набрано '+targetNew+' новых постов',false);return;}
     const height=document.documentElement?.scrollHeight||0;
     const progressed=stats.posts_seen>seenProgress||height>heightProgress+150;
     if(progressed){seenProgress=stats.posts_seen;heightProgress=height;idleSince=0;emptyScans=0;}
@@ -1165,15 +1201,20 @@ function start(){
   if(running)return;
   targetNew=stats.posts_new+Math.max(1,Math.min(50000,Number(countInput.value)||5000));
   emptyScans=0;idleSince=0;
-  void retryLocalPendingSync().catch(()=>{});
+  syncPaused=false;syncEpoch++;
+  void retryLocalPendingSync().catch(error=>console.error('PLA new-only retry',error));
   running=true;
   panel.style.display='block';
   render('Собираю…');
   tick();
 }
-function stop(msg='Остановлено'){
+function stop(msg='Остановлено',pauseUploads=true){
   running=false;
   if(timer)clearTimeout(timer);timer=null;
+  if(pauseUploads){
+    syncPaused=true;syncEpoch++;
+    try{activeSyncController?.abort();}catch{}
+  }
   saveCrawlState({status:'stopped'}).catch(()=>{});
   render(msg);
 }
@@ -1234,11 +1275,11 @@ async function selfTest(){
 
 function render(msg=''){
   if(!status)return;
-  status.innerHTML=(msg?`<b>${esc(msg)}</b><br>`:'')+`Статус: <b>${running?'РАБОТАЕТ':'ОСТАНОВЛЕН'}</b><br>В базе: посты <b>${dbCounts.posts}</b> · комментарии <b>${dbCounts.comments}</b> · медиа <b>${dbCounts.media}</b> · авторы <b>${dbCounts.authors}</b> · ошибки <b>${dbCounts.errors}</b><br>Постов просмотрено сейчас: <b>${stats.posts_seen}</b><br>Новых: <b>${stats.posts_new}</b> · обновлённых: <b>${stats.posts_updated}</b><br>Комментариев сейчас: <b>${stats.comments_seen}</b> · новых: <b>${stats.comments_new}</b><br>Неполные комментарии: <b>${stats.comments_incomplete}</b><br>Supabase: отправлено <b>${syncSubmitted}</b> · ждут <b>${syncQueue.length}</b> · ошибки <b>${syncFailed}</b><br>Последнее сохранение: <b>${lastSavedAt?new Date(lastSavedAt).toLocaleTimeString():'—'}</b>`;
+  status.innerHTML=(msg?`<b>${esc(msg)}</b><br>`:'')+`Статус: <b>${running?'РАБОТАЕТ':'ОСТАНОВЛЕН'}</b><br>В базе: посты <b>${dbCounts.posts}</b> · комментарии <b>${dbCounts.comments}</b> · медиа <b>${dbCounts.media}</b> · авторы <b>${dbCounts.authors}</b> · ошибки <b>${dbCounts.errors}</b><br>Постов просмотрено сейчас: <b>${stats.posts_seen}</b><br>Новых: <b>${stats.posts_new}</b> · обновлённых: <b>${stats.posts_updated}</b><br>Комментариев сейчас: <b>${stats.comments_seen}</b> · новых: <b>${stats.comments_new}</b><br>Неполные комментарии: <b>${stats.comments_incomplete}</b><br>Supabase (только новые): подтверждено <b>${syncSubmitted}</b> · очередь <b>${syncQueue.length}</b> · ошибки <b>${syncFailed}</b> · отправка <b>${syncPaused?'остановлена':'разрешена'}</b><br>Исключено старых неподтверждённых: <b>${excludedLegacyPending}</b><br>Последнее сохранение: <b>${lastSavedAt?new Date(lastSavedAt).toLocaleTimeString():'—'}</b>`;
 }
 
 const panel=document.createElement('div');panel.id=UI_ID;panel.style='position:fixed;top:12px;right:12px;width:400px;max-height:92vh;overflow:auto;z-index:2147483647;background:#fff;color:#111;border:2px solid #1877f2;border-radius:12px;padding:14px;font:16px/1.4 Arial,sans-serif;box-shadow:0 4px 20px #0005';
-panel.innerHTML=`<b style="font-size:18px">Pumpkin Latte Archive — PASSIVE + ENRICH</b><span id="pla-x" style="float:right;cursor:pointer;font-size:22px">✕</span><div style="margin-top:8px"><small>${VERSION}</small></div><label style="display:block;margin-top:10px">Остановиться после N новых постов<input id="pla-count" type="number" min="1" max="50000" value="5000" style="display:block;width:100%;box-sizing:border-box;padding:9px;margin-top:4px;font-size:16px"></label><div style="display:flex;gap:7px;margin-top:10px"><button id="pla-start" style="flex:1;padding:10px;font-size:16px">▶ Старт</button><button id="pla-stop" style="flex:1;padding:10px;font-size:16px">■ Стоп</button></div><div style="display:flex;gap:7px;margin-top:7px"><button id="pla-export" style="flex:1;padding:9px">Экспорт JSON</button><button id="pla-test" style="flex:1;padding:9px">Самотест</button></div><button id="pla-enrich" style="width:100%;padding:10px;margin-top:7px;background:#fff4de;border:1px solid #f59e0b;border-radius:6px">✨ Обогатить текущий открытый пост</button><button id="pla-sync" style="width:100%;padding:9px;margin-top:7px">Синхронизировать локальную базу → Supabase</button><button id="pla-check" style="width:100%;padding:8px;margin-top:7px">Проверить базу</button><button id="pla-clear" style="width:100%;padding:8px;margin-top:7px">Очистить ТЕСТОВЫЕ данные</button><div id="pla-status" style="margin-top:10px;line-height:1.5"></div><div style="margin-top:8px;font-size:12px;color:#555">Обычный сбор остаётся пассивным. Обогащение работает только внутри однозначно найденного открытого поста/диалога, проверяет ID и текст до записи и ничего не сохраняет при смене поста.</div>`;
+panel.innerHTML=`<b style="font-size:18px">Pumpkin Latte Archive — PASSIVE + ENRICH</b><span id="pla-x" style="float:right;cursor:pointer;font-size:22px">✕</span><div style="margin-top:8px"><small>${VERSION}</small></div><label style="display:block;margin-top:10px">Остановиться после N новых постов<input id="pla-count" type="number" min="1" max="50000" value="20" style="display:block;width:100%;box-sizing:border-box;padding:9px;margin-top:4px;font-size:16px"></label><div style="display:flex;gap:7px;margin-top:10px"><button id="pla-start" style="flex:1;padding:10px;font-size:16px">▶ Старт</button><button id="pla-stop" style="flex:1;padding:10px;font-size:16px">■ Стоп</button></div><div style="display:flex;gap:7px;margin-top:7px"><button id="pla-export" style="flex:1;padding:9px">Экспорт JSON</button><button id="pla-test" style="flex:1;padding:9px">Самотест</button></div><button id="pla-enrich" style="width:100%;padding:10px;margin-top:7px;background:#fff4de;border:1px solid #f59e0b;border-radius:6px">✨ Обогатить текущий открытый пост</button><button id="pla-sync" style="width:100%;padding:9px;margin-top:7px">Повторить отправку только новых записей</button><button id="pla-check" style="width:100%;padding:8px;margin-top:7px">Проверить базу</button><button id="pla-clear" style="width:100%;padding:8px;margin-top:7px">Очистить ТЕСТОВЫЕ данные</button><div id="pla-status" style="margin-top:10px;line-height:1.5"></div><div style="margin-top:8px;font-size:12px;color:#555">Обычный сбор остаётся пассивным. Обогащение работает только внутри однозначно найденного открытого поста/диалога, проверяет ID и текст до записи и ничего не сохраняет при смене поста.</div>`;
 document.body.appendChild(panel);panel.style.display='none';
 const status=panel.querySelector('#pla-status'),countInput=panel.querySelector('#pla-count');
 panel.querySelector('#pla-start').onclick=start;panel.querySelector('#pla-stop').onclick=()=>stop();panel.querySelector('#pla-export').onclick=exportJson;panel.querySelector('#pla-enrich').onclick=()=>{};panel.querySelector('#pla-sync').onclick=syncAllLocal;panel.querySelector('#pla-check').onclick=async()=>{await refreshDbCounts();render('База проверена')};panel.querySelector('#pla-clear').onclick=()=>{};panel.querySelector('#pla-test').onclick=async()=>{const r=await selfTest();console.table(r.tests);console.log('PLA self-test',r)};panel.querySelector('#pla-x').onclick=()=>{stop();panel.style.display='none'};

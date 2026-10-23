@@ -1,7 +1,7 @@
 'use strict';
 const KEY='pla_longrun_config';
 const ALARM='pla-longrun-heartbeat';
-const DEFAULT={running:false,target:5000,started_at:null,updated_at:null,last_pulse:null,status:'stopped',last_error:null};
+const DEFAULT={running:false,target:20,started_at:null,updated_at:null,last_pulse:null,status:'stopped',last_error:null};
 const get=async()=>({...DEFAULT,...((await chrome.storage.local.get(KEY))[KEY]||{})});
 const save=async state=>chrome.storage.local.set({[KEY]:state});
 const isFeed=url=>/^https:\/\/www\.facebook\.com\/groups\/pumpkinlatte\/?(?:\?.*)?$/.test(String(url||''));
@@ -31,7 +31,7 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
     const s=await get();
     if(message.type==='state')return {ok:true,...s};
     if(message.type==='start'){
-      const target=Math.min(50000,Math.max(1,Math.floor(Number(message.target)||5000)));
+      const target=Math.min(50000,Math.max(1,Math.floor(Number(message.target)||20)));
       const tab=await groupTab();
       if(!tab)throw Error('Open the Pumpkin Latte Facebook group feed first');
       s.running=true;s.target=target;s.status='starting';s.started_at=new Date().toISOString();

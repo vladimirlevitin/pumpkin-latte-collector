@@ -7,7 +7,7 @@ async function launch(target){
   if(!isFeed())return {error:'Open the group feed, not an individual post'};
   const c=core();if(!c?.start)return {error:'Collector is not initialized'};
   const input=document.getElementById('pla-count');
-  if(input)input.value=String(Math.min(50000,Math.max(1,Number(target)||5000)));
+  if(input)input.value=String(Math.min(50000,Math.max(1,Number(target)||20)));
   if(!c.isRunning?.())c.start();
   everStarted=true;
   return {ok:true,ready:true,running:true};

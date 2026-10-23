@@ -52,6 +52,7 @@ test('no backend service role credential or disabled authentication',()=>{
 test('sync failures counter initialized and queue is recoverable',()=>{
  const s=read('core.js');
  assert.match(s,/syncSubmitted=0,syncFailed=0/);
+ assert.match(s,/syncPaused=true,syncEpoch=0/);
  assert.match(s,/async function drainSyncQueue\(\)/);
  assert.match(s,/finally\{[\s\S]*syncBusy=false;/);
  assert.match(s,/stage:'sync_queue'/);
@@ -70,4 +71,68 @@ test('watchdog does not hide the active panel',()=>{
  const s=read('core.js');
  assert.match(s,/panel\.style\.display='block';/);
  assert.doesNotMatch(s,/document\.body\.appendChild\(panel\);panel\.style\.display='none'/);
+});
+
+
+test('only newly marked local posts may be retried',async()=>{
+ const vm=require('node:vm'),s=read('core.js');
+ const code=s.slice(s.indexOf('async function retryLocalPendingSync(){'),s.indexOf('async function syncAllLocal(){'));
+ const queued=[];
+ const posts=[
+  {key:'fb:pumpkinlatte:post:1',sync_status:'pending'},
+  {key:'fb:pumpkinlatte:post:2',safe_sync_new_only:true,sync_status:'pending'},
+  {key:'fb:pumpkinlatte:post:3',safe_sync_new_only:true,sync_status:'synced'},
+  {key:'fb:pumpkinlatte:post:4',safe_sync_new_only:false,sync_status:'sending'}];
+ const ctx={getAll:async()=>posts,syncablePostKey:k=>/^fb:pumpkinlatte:post:\d+$/.test(k),queueSyncPost:k=>queued.push(k)};
+ vm.runInNewContext(code+';globalThis.run=retryLocalPendingSync;',ctx);
+ await ctx.run();assert.deepEqual(queued,['fb:pumpkinlatte:post:2']);
+});
+test('legacy posts cannot acquire the new eligibility marker on updates',async()=>{
+ const vm=require('node:vm'),s=read('core.js');
+ const code=s.slice(s.indexOf('async function upsertRecord('),s.indexOf('async function persistBundle('));
+ const map=new Map([['posts:old',{key:'old',sync_status:'pending'}]]);
+ const ctx={VERSION:'test-v2.8.5',nowIso:()=>new Date(0).toISOString(),
+  getOne:async(t,k)=>map.get(t+':'+k)||null,
+  putOne:async(t,v)=>{map.set(t+':'+v.key,v);}};
+ vm.runInNewContext(code+';globalThis.run=upsertRecord;',ctx);
+ await ctx.run('posts',{key:'old',text:'re-read'});
+ await ctx.run('posts',{key:'new',text:'new'});
+ await ctx.run('comments',{key:'comment'});
+ assert.notEqual(map.get('posts:old').safe_sync_new_only,true);
+ assert.equal(map.get('posts:new').safe_sync_new_only,true);
+ assert.notEqual(map.get('comments:comment').safe_sync_new_only,true);
+});
+test('payload builder refuses legacy data without loading comments',async()=>{
+ const vm=require('node:vm'),s=read('core.js');
+ const code=s.slice(s.indexOf('async function buildSyncPayload('),s.indexOf('async function markSyncStatus('));
+ const ctx={getOne:async()=>({key:'fb:pumpkinlatte:post:1',facebook_post_id:'1'}),
+ syncablePostKey:()=>true,getAll:async()=>{throw Error('legacy must not be read');}};
+ vm.runInNewContext(code+';globalThis.run=buildSyncPayload;',ctx);
+ assert.equal(await ctx.run('fb:pumpkinlatte:post:1'),null);
+});
+test('network cannot retry when Stop is active',async()=>{
+ const vm=require('node:vm'),s=read('core.js');
+ const code=s.slice(s.indexOf('async function submitPayloadsAndWait('),s.indexOf('async function drainSyncQueue('));
+ let called=0;
+ const ctx={syncPaused:true,syncEpoch:9,fetch:async()=>{called++;throw Error('unexpected');}};
+ vm.runInNewContext(code+';globalThis.run=submitPayloadsAndWait;',ctx);
+ const result=await ctx.run([],9);
+ assert.equal(result.paused,true);assert.equal(called,0);
+});
+test('manual Stop aborts current HTTP upload and pauses subsequent uploads',()=>{
+ const vm=require('node:vm'),s=read('core.js');
+ const code=s.slice(s.indexOf('function stop(msg='),s.indexOf('async function exportJson('));
+ let aborted=0;
+ const ctx={running:true,timer:null,syncPaused:false,syncEpoch:2,
+ activeSyncController:{abort(){aborted++;}},
+ saveCrawlState:()=>Promise.resolve(),render:()=>{},clearTimeout:()=>{}};
+ vm.runInNewContext(code+';globalThis.run=stop;',ctx);
+ ctx.run();
+ assert.equal(ctx.running,false);assert.equal(ctx.syncPaused,true);
+ assert.equal(ctx.syncEpoch,3);assert.equal(aborted,1);
+});
+test('passive rescan does not queue existing posts',()=>{
+ const source=read('core.js');
+ assert.match(source,/if\(result\.postStatus==='new'\)queueSyncPost\(post\.key\)/);
+ assert.doesNotMatch(source,/result\.postStatus!=='unchanged'\|\|localPost\?\.sync_status/);
 });

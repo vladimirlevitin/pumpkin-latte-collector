@@ -4,7 +4,7 @@ async function refresh(){
   try{
     const r=await chrome.runtime.sendMessage({type:'state'});
     if(r?.error)throw Error(r.error);
-    if(document.activeElement!==$('target'))$('target').value=r.target||5000;
+    if(document.activeElement!==$('target'))$('target').value=r.target||20;
     $('status').textContent='Состояние: '+(r.status||'unknown')+
       '\nАктивен: '+(r.running?'да':'нет')+
       '\nНачало: '+(r.started_at||'—')+
