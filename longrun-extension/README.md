@@ -27,7 +27,7 @@
 
 ## Установка (Windows / Chrome)
 
-- Скачать [готовый ZIP](https://raw.githubusercontent.com/vladimirlevitin/pumpkin-latte-collector/fix/longrun-feed-collector-v0.1.1/downloads/pumpkin-latte-longrun-v0.1.1.zip).
+- Скачать [готовый ZIP](https://raw.githubusercontent.com/vladimirlevitin/pumpkin-latte-collector/fix/longrun-v0.1.1-package-qa/downloads/pumpkin-latte-longrun-v0.1.1.zip).
 - Распаковать в отдельную постоянную папку (не удалять после установки).
 - В Chrome открыть `chrome://extensions`, включить «Режим разработчика», нажать «Загрузить распакованное расширение», выбрать папку с файлом `manifest.json`.
 - **На время теста выключить предыдущее расширение «Pumpkin Latte Enrichment Pilot»**, иначе два скрипта будут конфликтовать.

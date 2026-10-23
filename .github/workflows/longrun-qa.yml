@@ -4,6 +4,7 @@ on:
     branches:
       - feature/longrun-feed-collector-v1
       - fix/longrun-feed-collector-v0.1.1
+      - fix/longrun-v0.1.1-package-qa
     paths:
       - "longrun-extension/**"
       - "tests/longrun-contract.test.cjs"

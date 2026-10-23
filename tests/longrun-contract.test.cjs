@@ -42,6 +42,12 @@ test('background heartbeat and recovery state are persistent',()=>{
  assert.match(source,/chrome\.alarms\.create/);
  assert.match(source,/coreStopped/);
 });
+
+test('start requires a collector acknowledgment and clears running on failure',()=>{
+ const source=read('background.js');
+ assert.match(source,/!response\?\.ok \|\| response\?\.error/);
+ assert.match(source,/s\.running=false;s\.status='start_failed'/);
+});
 test('no backend service role credential or disabled authentication',()=>{
  const source=read('core.js')+read('background.js');
  assert.doesNotMatch(source,/SERVICE_ROLE_KEY/);
@@ -69,5 +75,7 @@ test('resuming does not instantly exhaust the target',()=>{
 test('watchdog does not hide the active panel',()=>{
  const s=read('core.js');
  assert.match(s,/panel\.style\.display='block';/);
- assert.doesNotMatch(s,/document\.body\.appendChild\(panel\);panel\.style\.display='none'/);
+ const watchdog=s.slice(s.indexOf('watchdog=setInterval(async()=>'));
+ assert.match(watchdog,/if\(!panel\.isConnected&&document\.body\)document\.body\.appendChild\(panel\)/);
+ assert.doesNotMatch(watchdog,/panel\.style\.display='none'/);
 });
