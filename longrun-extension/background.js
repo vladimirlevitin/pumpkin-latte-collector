@@ -37,8 +37,8 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
       s.running=true;s.target=target;s.status='starting';s.started_at=new Date().toISOString();
       s.updated_at=s.started_at;s.last_error=null;await save(s);
       try{const response=await chrome.tabs.sendMessage(tab.id,{type:'start',target});
-        if(response?.error)throw Error(response.error);
-      }catch(e){s.status='waiting_for_page';s.last_error=String(e);await save(s);}
+        if(!response?.ok || response?.error)throw Error(response?.error || 'Collector did not acknowledge start');
+      }catch(e){s.running=false;s.status='start_failed';s.last_error=String(e);s.updated_at=new Date().toISOString();await save(s);return {error:s.last_error,...s};}
       return {ok:true,...s};
     }
     if(message.type==='stop'){
