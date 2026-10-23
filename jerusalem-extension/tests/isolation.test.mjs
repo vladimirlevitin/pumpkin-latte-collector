@@ -4,7 +4,7 @@ const directory=new URL('../',import.meta.url);
 const read=name=>readFileSync(new URL(name,directory),'utf8');
 const core=read('core.js'),bg=read('background.js'),content=read('content.js');
 const manifest=JSON.parse(read('manifest.json'));
-assert.equal(manifest.version,'0.1.0');
+assert.equal(manifest.version,'0.1.1');
 assert.equal(manifest.content_scripts[0].matches[0],'https://www.facebook.com/groups/374040476267868*');
 assert.deepEqual(manifest.host_permissions,['https://www.facebook.com/*']);
 assert.ok(core.includes("const DB_NAME='jerusalem_ru_archive';"));
@@ -23,4 +23,10 @@ for(const data of [core,bg,content,read('popup.html'),read('popup.js')]){
  assert.ok(!data.includes('__PLA_FB_ARCHIVE'),'old global leaked');
  assert.ok(!data.includes('ltznpjfnkpydautbsrej'),'old Supabase project leaked');
 }
-console.log('Jerusalem isolation contract PASS');
+assert.ok(core.includes('function isUsableFeedPost(post,hasMedia=false)'));
+assert.ok(core.includes('stats.posts_skipped++'));
+assert.ok(core.includes('valid_posts:validPostCount'));
+assert.ok(core.includes('stopReason:()=>lastStopReason'));
+assert.ok(content.includes("type:'coreStopped',stats:"));
+assert.ok(bg.includes("message.completed?'completed':'paused_by_collector'"));
+console.log('Jerusalem isolation and quality contract PASS');
