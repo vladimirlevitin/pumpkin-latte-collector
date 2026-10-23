@@ -1,7 +1,7 @@
 (()=>{
 'use strict';
 
-const VERSION='jr-fb-archive-v0.1.0-passive';
+const VERSION='jr-fb-archive-v0.1.1-passive';
 const SCHEMA_VERSION=2;
 const DB_NAME='jerusalem_ru_archive';
 const DB_VERSION=1;
@@ -361,6 +361,21 @@ function mediaFromRoot(root,ownerType,ownerTempKey){
   return out;
 }
 
+// Only an identifiable post belonging to this group may count toward the pilot.
+function isUsableFeedPost(post,hasMedia=false){
+  const id=String(post?.facebook_post_id||'');
+  if(!/^\d+$/.test(id)||!post?.canonical_url)return false;
+  try{
+    const u=new URL(post.canonical_url);
+    if(u.protocol!=='https:'||!['www.facebook.com','facebook.com'].includes(u.hostname))return false;
+    const path=u.pathname.replace(/\/?$/,'/');
+    const validPath=`/groups/${GROUP_PATH}/posts/${id}/`;
+    const oldPath=`/groups/${GROUP_PATH}/permalink/${id}/`;
+    if(path!==validPath&&path!==oldPath)return false;
+  }catch{return false;}
+  return norm(post.text||'').length>0||Boolean(hasMedia);
+}
+
 async function buildPostRecord(article){
   const meta=permalinkMeta(article)||{};
   const author=extractAuthor(article);
@@ -545,6 +560,7 @@ async function refreshDbCounts(){
   dbCounts=Object.fromEntries(names.map((n,i)=>[n,values[i]]));
   const rows=await getAll('posts');
   excludedLegacyPending=rows.filter(p=>p.safe_sync_new_only!==true&&p.sync_status!=='synced').length;
+  dbCounts.postsWithId=rows.filter(p=>/^\d+$/.test(String(p.facebook_post_id||''))).length;
   return dbCounts;
 }
 
@@ -778,9 +794,9 @@ async function persistBundle(post,comments,media){
 
 async function addError(data){try{await reqPromise((await txStore('errors','readwrite')).add({created_at:nowIso(),...data}))}catch{} }
 
-const stats={posts_seen:0,posts_new:0,posts_updated:0,comments_seen:0,comments_new:0,comments_updated:0,media_seen:0,media_new:0,errors:0,comments_incomplete:0};
+const stats={posts_seen:0,posts_new:0,posts_updated:0,posts_skipped:0,comments_seen:0,comments_new:0,comments_updated:0,media_seen:0,media_new:0,errors:0,comments_incomplete:0};
 let running=false,timer=null,targetNew=100,seenSession=new Set(),emptyScans=0,watchdog=null,syncWin=null,syncQueue=[],syncQueuedKeys=new Set(),syncBusy=false,syncSubmitted=0,syncFailed=0,syncPaused=true,syncEpoch=0,activeSyncController=null;
-const failedPosts=new Map(),syncRetries=new Map();let idleSince=0,seenProgress=0,heightProgress=0;
+const failedPosts=new Map(),syncRetries=new Map();let idleSince=0,seenProgress=0,heightProgress=0,lastStopReason='';
 
 async function saveCrawlState(extra={}){
   const state={key:STATE_KEY,collector_version:VERSION,schema_version:SCHEMA_VERSION,group:GROUP_PATH,page_url:location.href,updated_at:nowIso(),stats:{...stats},...extra};
@@ -1156,14 +1172,22 @@ async function processArticle(article){
   // Read only what Facebook has already rendered; enrichment will be a separate stage.
   const post=await buildPostRecord(article);
   if(seenSession.has(post.key))return null;
+  let postMedia=[];
+  try{postMedia=mediaFromRoot(article,'post',post.key).map(m=>({...m,owner_key:post.key}));}
+  catch(e){await addError({stage:'post_media',message:String(e)});}
+  // Exclude empty Facebook placeholders and links to other groups.
+  // A genuine image-only post with an authentic permalink remains eligible.
+  if(!isUsableFeedPost(post,postMedia.length>0)){
+    seenSession.add(post.key);stats.posts_skipped++;
+    return null;
+  }
   const comments=await buildComments(article,post);
   stats.comments_seen+=comments.length;
   post.comments_complete=remainingExpandControls(article).length===0;
   if(!post.comments_complete)stats.comments_incomplete++;
   post.raw_metadata={...(post.raw_metadata||{}),capture_mode:'passive',needs_enrichment:!post.comments_complete||/Ещё|See more|הצג עוד/i.test(post.text||'')};
 
-  let media=[];
-  try{media=mediaFromRoot(article,'post',post.key).map(m=>({...m,owner_key:post.key}));}catch(e){await addError({stage:'post_media',message:String(e)});}
+  let media=postMedia;
   for(const comment of comments){try{for(const m of mediaFromRoot(comment._article,'comment',comment.key))media.push({...m,owner_key:comment.key});}catch(e){await addError({stage:'comment_media',message:String(e)});}}
   stats.media_seen+=media.length;
 
@@ -1225,6 +1249,7 @@ async function tick(){
 function start(){
   if(running)return;
   if(!isTargetFeed()){render('Откройте ленту группы Иерусалим по-русски и обновите страницу');return;}
+  lastStopReason='';
   targetNew=stats.posts_new+Math.max(1,Math.min(50000,Number(countInput.value)||5000));
   emptyScans=0;idleSince=0;
   syncPaused=!SERVER_SAFE_INGEST_READY;syncEpoch++;
@@ -1236,6 +1261,7 @@ function start(){
   tick();
 }
 function stop(msg='Остановлено',pauseUploads=true){
+  lastStopReason=msg;
   running=false;
   if(timer)clearTimeout(timer);timer=null;
   if(pauseUploads){
@@ -1249,7 +1275,9 @@ function stop(msg='Остановлено',pauseUploads=true){
 async function exportJson(){
   const [authors,posts,comments,media,errors,states]=await Promise.all(['authors','posts','comments','media','errors','crawl_state'].map(getAll));
   const state=states.find(x=>x.key===STATE_KEY)||null;
-  const out={collector_version:VERSION,schema_version:SCHEMA_VERSION,exported_at:nowIso(),group:{platform:'facebook',identifier:GROUP_PATH,url:location.href},crawl:state,authors,posts,comments,media,errors,summary:{posts:posts.length,comments:comments.length,media:media.length,authors:authors.length,errors:errors.length,session:{...stats}}};
+  const mediaPostKeys=new Set(media.filter(m=>m.owner_type==='post').map(m=>m.owner_key));
+  const validPostCount=posts.filter(p=>isUsableFeedPost(p,mediaPostKeys.has(p.key))).length;
+  const out={collector_version:VERSION,schema_version:SCHEMA_VERSION,exported_at:nowIso(),group:{platform:'facebook',identifier:GROUP_PATH,url:location.href},crawl:state,authors,posts,comments,media,errors,summary:{posts:posts.length,valid_posts:validPostCount,invalid_posts:posts.length-validPostCount,comments:comments.length,media:media.length,authors:authors.length,errors:errors.length,session:{...stats}}};
   const blob=new Blob([JSON.stringify(out,null,2)],{type:'application/json;charset=utf-8'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`jerusalem_ru_archive_${new Date().toISOString().replace(/[:.]/g,'-')}.json`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);render('JSON сохранён');
 }
 
@@ -1296,17 +1324,23 @@ async function selfTest(){
     tdoc.getBoundingClientRect=()=>({top:0,bottom:100,width:640,height:100});
     ok('data-utime date',dateFromRoot(tdoc,'post') instanceof Date);
     ok('date line is not comment text',cleanLines('3 дн.').length===0);
+    ok('empty placeholder skipped',!isUsableFeedPost({facebook_post_id:null,canonical_url:null,text:''},false));
+    const sample={facebook_post_id:'123',canonical_url:'https://www.facebook.com/groups/'+GROUP_PATH+'/posts/123/',text:'Ищем школу'};
+    ok('real group post accepted',isUsableFeedPost(sample,false));
+    ok('foreign group rejected',!isUsableFeedPost({...sample,canonical_url:'https://www.facebook.com/groups/123123/posts/123/'},false));
+    ok('image-only post retained',isUsableFeedPost({...sample,text:''},true));
+    ok('empty post without media rejected',!isUsableFeedPost({...sample,text:''},false));
   }catch(e){ok('self-test runtime',false,String(e?.stack||e));}
   const passed=tests.filter(x=>x.pass).length,failed=tests.length-passed;render(`Самотест: ${passed} PASS / ${failed} FAIL`);return {version:VERSION,passed,failed,tests};
 }
 
 function render(msg=''){
   if(!status)return;
-  status.innerHTML=(msg?`<b>${esc(msg)}</b><br>`:'')+`Статус: <b>${running?'РАБОТАЕТ':'ОСТАНОВЛЕН'}</b><br>В базе: посты <b>${dbCounts.posts}</b> · комментарии <b>${dbCounts.comments}</b> · медиа <b>${dbCounts.media}</b> · авторы <b>${dbCounts.authors}</b> · ошибки <b>${dbCounts.errors}</b><br>Постов просмотрено сейчас: <b>${stats.posts_seen}</b><br>Новых: <b>${stats.posts_new}</b> · обновлённых: <b>${stats.posts_updated}</b><br>Комментариев сейчас: <b>${stats.comments_seen}</b> · новых: <b>${stats.comments_new}</b><br>Неполные комментарии: <b>${stats.comments_incomplete}</b><br>Supabase: <b>ОТКЛЮЧЕНА</b> — данные только в браузере; после серии сохраните JSON.<br>Последнее сохранение: <b>${lastSavedAt?new Date(lastSavedAt).toLocaleTimeString():'—'}</b>`;
+  status.innerHTML=(msg?`<b>${esc(msg)}</b><br>`:'')+`Статус: <b>${running?'РАБОТАЕТ':'ОСТАНОВЛЕН'}</b><br>В базе: посты <b>${dbCounts.posts}</b> (с Facebook ID: <b>${dbCounts.postsWithId||0}</b>) · комментарии <b>${dbCounts.comments}</b> · медиа <b>${dbCounts.media}</b> · авторы <b>${dbCounts.authors}</b> · ошибки <b>${dbCounts.errors}</b><br>Постов просмотрено сейчас: <b>${stats.posts_seen}</b><br>Новых: <b>${stats.posts_new}</b> · обновлённых: <b>${stats.posts_updated}</b> · пропущено сомнительных блоков: <b>${stats.posts_skipped}</b><br>Комментариев сейчас: <b>${stats.comments_seen}</b> · новых: <b>${stats.comments_new}</b><br>Неполные комментарии: <b>${stats.comments_incomplete}</b><br>Supabase: <b>ОТКЛЮЧЕНА</b> — данные только в браузере; после серии сохраните JSON.<br>Последнее сохранение: <b>${lastSavedAt?new Date(lastSavedAt).toLocaleTimeString():'—'}</b>`;
 }
 
 const panel=document.createElement('div');panel.id=UI_ID;panel.style='position:fixed;top:12px;right:12px;width:400px;max-height:92vh;overflow:auto;z-index:2147483647;background:#fff;color:#111;border:2px solid #1877f2;border-radius:12px;padding:14px;font:16px/1.4 Arial,sans-serif;box-shadow:0 4px 20px #0005';
-panel.innerHTML=`<b style="font-size:18px">Иерусалим по-русски Archive — PASSIVE + ENRICH</b><span id="jr-x" style="float:right;cursor:pointer;font-size:22px">✕</span><div style="margin-top:8px"><small>${VERSION}</small></div><label style="display:block;margin-top:10px">Остановиться после N новых постов<input id="jr-count" type="number" min="1" max="50000" value="20" style="display:block;width:100%;box-sizing:border-box;padding:9px;margin-top:4px;font-size:16px"></label><div style="display:flex;gap:7px;margin-top:10px"><button id="jr-start" style="flex:1;padding:10px;font-size:16px">▶ Старт</button><button id="jr-stop" style="flex:1;padding:10px;font-size:16px">■ Стоп</button></div><div style="display:flex;gap:7px;margin-top:7px"><button id="jr-export" style="flex:1;padding:9px">Экспорт JSON</button><button id="jr-test" style="flex:1;padding:9px">Самотест</button></div><button id="jr-check" style="width:100%;padding:8px;margin-top:7px">Проверить базу</button><div id="jr-status" style="margin-top:10px;line-height:1.5"></div><div style="margin-top:8px;font-size:12px;color:#555">Сбор только из видимой ленты. Комментарии могут быть неполными; используйте «Экспорт JSON» после серии. Отправка в Supabase отключена.</div>`;
+panel.innerHTML=`<b style="font-size:18px">Иерусалим по-русски — локальный сбор</b><span id="jr-x" style="float:right;cursor:pointer;font-size:22px">✕</span><div style="margin-top:8px"><small>${VERSION}</small></div><label style="display:block;margin-top:10px">Остановиться после N новых постов<input id="jr-count" type="number" min="1" max="50000" value="20" style="display:block;width:100%;box-sizing:border-box;padding:9px;margin-top:4px;font-size:16px"></label><div style="display:flex;gap:7px;margin-top:10px"><button id="jr-start" style="flex:1;padding:10px;font-size:16px">▶ Старт</button><button id="jr-stop" style="flex:1;padding:10px;font-size:16px">■ Стоп</button></div><div style="display:flex;gap:7px;margin-top:7px"><button id="jr-export" style="flex:1;padding:9px">Экспорт JSON</button><button id="jr-test" style="flex:1;padding:9px">Самотест</button></div><button id="jr-check" style="width:100%;padding:8px;margin-top:7px">Проверить базу</button><div id="jr-status" style="margin-top:10px;line-height:1.5"></div><div style="margin-top:8px;font-size:12px;color:#555">Сбор только из видимой ленты. Комментарии могут быть неполными; используйте «Экспорт JSON» после серии. Отправка в Supabase отключена.</div>`;
 document.body.appendChild(panel);panel.style.display='none';
 const status=panel.querySelector('#jr-status'),countInput=panel.querySelector('#jr-count');
 panel.querySelector('#jr-start').onclick=start;panel.querySelector('#jr-stop').onclick=()=>stop();panel.querySelector('#jr-export').onclick=exportJson;panel.querySelector('#jr-check').onclick=async()=>{await refreshDbCounts();render('База проверена')};panel.querySelector('#jr-test').onclick=async()=>{const r=await selfTest();console.table(r.tests);console.log('JR self-test',r)};panel.querySelector('#jr-x').onclick=()=>{stop();panel.style.display='none'};
@@ -1314,7 +1348,7 @@ async function refreshUi(){
   try{await refreshDbCounts();}catch{}
   render(running?'Собираю…':'Панель восстановлена');
 }
-window.__JR_FB_ARCHIVE={panel,start,stop,scan:scanVisible,enrichCurrentPost,exportJson,selfTest,syncAll:syncAllLocal,buildSyncPayload,version:VERSION,dbName:DB_NAME,stats,refresh:refreshUi,isRunning:()=>running};
+window.__JR_FB_ARCHIVE={panel,start,stop,scan:scanVisible,enrichCurrentPost,exportJson,selfTest,syncAll:syncAllLocal,buildSyncPayload,version:VERSION,dbName:DB_NAME,stats,refresh:refreshUi,isRunning:()=>running,stopReason:()=>lastStopReason};
 watchdog=setInterval(async()=>{
   if(!panel.isConnected&&document.body)document.body.appendChild(panel);
   if(running){try{await refreshDbCounts();}catch{};render('Собираю…');}
