@@ -57,7 +57,7 @@ chrome.runtime.onMessage.addListener((m,sender,reply)=>{
  }
  if(m.type==='stop'){s.running=false;log(s,s.current,'paused','Finish current post before pause');await put(s);return{ok:true}}
  if(m.type==='ready'){
-  if(!sender.tab||!s.running||!s.current||s.tab_id!==sender.tab.id||m.id!==s.current||sender.tab.url?.split('?')[0]!==url(s.current))return{run:false};
+  if(!sender.tab||!s.running||!s.current||s.tab_id!==sender.tab.id||m.id!==s.current||String(sender.tab.url||'').split('?')[0].replace(/\/$/,'')!==url(s.current).replace(/\/$/,''))return{run:false};
   const j=s.queue.find(x=>x.id===s.current);if(!j||j.status!=='processing')return{run:false};
   j.ready_at=now();await put(s);return{run:true,id:s.current};
  }
