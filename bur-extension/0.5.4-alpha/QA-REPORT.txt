@@ -1,0 +1,48 @@
+25.10.2026 — FB Бур 0.5.4-alpha
+
+Причина подтверждена в установленном локальном Chromium-расширении:
+старый фильтр MessageSender.tab возвращает export.html
+{ok:true,result:{ignored:true}} вместо {ok:true,result:{job,items,total}}.
+Старый export.js показывает exact failure:
+r.items is not iterable (cannot read property undefined).
+
+Исправление: только собственный URL export.html + запрос exportSlice
+обходят проверку привязки Facebook-вкладки. Прочие сообщения сохраняют
+прежнюю защиту. Экспорт валидирует форму ответа и берёт версию из manifest.
+DB и storage namespace прежние; миграции/очистки при обновлении нет.
+
+Регрессии:
+- Реальный background.js и export.js, sender.tab страницы расширения;
+  сохранённые архивы на 5 и 53 поста после перезапуска worker.
+- Экспорт не обращается к вкладкам Facebook и не меняет storage/посты.
+- Проверены все поля постов, комментарии, parent_id, ошибки и пагинация.
+- Локальный браузер: автоматическое скачивание JSON, повторное скачивание,
+  пустой архив, ошибочный ответ, ошибка API.
+- Установленное Chromium-расширение: воспроизведение старого сбоя;
+  отдельная установка исправленной версии с данными старой схемы;
+  скачивание всех 53 сохранённых постов без посещения Facebook.
+  Сохранение состояния при перезапуске worker проверено интеграционным
+  тестом test-worker.js; настоящая перезагрузка расширения на том же
+  браузерном профиле не подтверждена из-за кеша worker тестового Chromium.
+
+Проверки синтаксиса JS: PASS.
+Сборщик, прокрутка, popup и export.html неизменны; content.js — только версия.
+Живой Facebook НЕ тестировался. Проверки совместимости использовали
+синтетический сохранённый архив; пользовательский браузер не изменялся.
+
+Полный набор: 14/14 PASS (12 прежних + 2 новых).
+
+test-comment-upgrade.js: PASS
+test-scroll.js: PASS
+test-worker.js: PASS
+test_comments_dom.py: PASS
+test_content_integration.py: PASS
+test_export_browser.py: PASS
+test_modal_browser.py: PASS
+test_nested_replies_dom.py: PASS
+test_permalink_fallback.py: PASS
+test_popup_flow.py: PASS
+test_post_detail_browser.py: PASS
+test_reply_dialog_integration.py: PASS
+test_scroll_browser.py: PASS
+test_extension_export.py: PASS

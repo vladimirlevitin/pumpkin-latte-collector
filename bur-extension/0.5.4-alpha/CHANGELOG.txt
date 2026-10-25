@@ -1,0 +1,72 @@
+FB БУР 0.5.4-alpha — ИСПРАВЛЕНИЕ ЭКСПОРТА
+25 октября 2026 г.
+
+Причина: export.html открыт в отдельной вкладке, поэтому MessageSender
+содержит tab. Проверка привязки сборщика возвращала для exportSlice
+{ok:true,result:{ignored:true}}, а export.js разворачивал отсутствующий items.
+Теперь собственная страница export.html получает {ok:true,result:{job,items,total}}.
+Исключение действует только для exportSlice и точного URL страницы расширения.
+Проверка чужих Facebook-вкладок сохранена. Неожиданный ответ теперь показывает
+понятную ошибку, не выдаёт пустой архив за успешный результат.
+collector_version берётся из manifest.
+
+КАК ВЫГРУЗИТЬ УЖЕ СОБРАННЫЕ ДАННЫЕ
+1. Обновите существующее расширение НА МЕСТЕ: распакуйте ZIP в прежнюю
+   папку расширения с заменой файлов, затем нажмите «Обновить» на его карточке
+   в chrome://extensions. Не удаляйте расширение и не загружайте копию из
+   другой папки: нужно сохранить прежний ID и его хранилище.
+2. Откройте панель Бура и нажмите существующую кнопку «Экспорт».
+   Откроется export.html, JSON скачается автоматически. Facebook открывать
+   и запускать новый сбор не требуется. «Скачать ещё раз» повторяет скачивание.
+3. Не нажимайте «Начать»: новый сбор по прежним правилам очищает архив группы.
+
+DB bur-collector-v05, версия БД 1 и ключ burCollectorJob-v05 не изменены.
+Экспорт читает посты IndexedDB группы сохранённого задания из storage.local.
+Если данные или запись задания удалены, восстановление этой версией невозможно.
+Сборщик, кнопки панели и автоматический переход к экспорту сохранены;
+в content.js изменена только строка версии для согласования с background.
+Живой Facebook в проверках 0.5.4 не использовался.
+
+--- ИСТОРИЯ ПРЕДЫДУЩИХ ВЕРСИЙ ---
+
+FB БУР 0.5.3-alpha — ПРИВЯЗКА К ИСХОДНОЙ ВКЛАДКЕ
+25 октября 2026 г.
+
+Задание сохраняет исходные tabId и группу на весь срок работы.
+Продолжение и переход к сбору найденных не могут передать задание другой
+вкладке, даже если там открыта та же группа. Чужие вкладки не получают
+рабочее состояние и не могут передавать результаты или менять ход задания.
+Способ установки, кнопки панели и остальные функции сохранены.
+
+0.5.2-alpha — 25.10.2026
+- LIVE DATA FIX: 0.5.1 completed 53/53 autonomously, but 13 deep posts failed; 8/8 posts with “Посмотреть N ответов” failed.
+- FIX: collector-opened reply/comment dialogs are harvested and closed automatically instead of failing the whole post.
+- FIX: reply identity prefers reply_comment_id over parent comment_id.
+- FIX: Facebook /groups/.../user/<id> author links are accepted; author stored separately.
+- FIX: nested reply parent_id derives from nearest parent comment article.
+- FIX: permalink pages without role=article around the post get a conservative body-root fallback.
+- SAFETY: deep clicks one expansion control per cycle to avoid opening multiple Facebook thread UIs before the first settles.
+- TESTS: added nested reply/author, collector-owned reply-dialog, and permalink-root regressions.
+
+0.5.1-alpha — 25.10.2026
+- FIX live deep redirect: onUpdated сверяет фактический URL с текущим post_id и автоматически возвращает вкладку на canonical permalink.
+- BOUNDED recovery: 3 автовозврата; 4-й redirect одного поста => failed только этот пост, затем следующий.
+- UX: «Подробно: done/total» переименовано в «Успешно», текущий индекс — «Сейчас».
+- REGRESSION: добавлен сценарий асинхронного redirect на facebook.com без pause/resume; на 0.5.0 воспроизводил живой провал.
+
+0.5.0-alpha — 25.10.2026
+- Архитектурный reset отказоустойчивости deep-прохода.
+- Ошибка одного deep-поста больше не переводит всю очередь в stalled.
+- Удалены паузы только из-за неактивной вкладки.
+- Автовозврат к ожидаемому permalink после Facebook redirect.
+- tabs.onUpdated будит content script после загрузки.
+- Nested dialog wrappers одного permalink-поста поддерживаются.
+- Discovery popup: до 5 автоматических возвратов к ленте.
+- Discovery watchdog: до 3 автоматических перезагрузок.
+- Новая изолированная DB/job namespace v05; старый тестовый прогресс не мигрируется.
+- Добавлены regression/fault-injection сценарии в worker/detail tests.
+
+0.4.0-alpha
+- Collector-only split from ranking/AI/import.
+- All discovered posts queued for deep extraction.
+- Field test exposed false modal stall and broader resilience design flaw.
