@@ -1,0 +1,45 @@
+FB БУР 0.5.5-alpha — ИСПРАВЛЕНИЯ ПО ПРОГОНУ 0.5.4
+25 октября 2026 г.
+
+- id ответа берётся из reply_comment_id, parent_id — из comment_id того же permalink.
+  DOM-вложенность используется только как резервный источник parent_id.
+- Короткий пост в диалоге распознаётся по permalink текущей публикации;
+  вложенные оболочки целевого поста разрешены. Отдельный неожиданный диалог
+  по-прежнему блокирует deep. Разведка сохраняет прежнюю защиту.
+- Имя автора и кнопки исключаются из поиска body комментария. Если фактический
+  текст не найден, комментарий с явным id сохраняется с text="".
+- collector новых снимков: fb-group-bur/0.5.5-alpha; версия сборки: 0.5.5-alpha.
+
+Workflow, привязка задания к группе/вкладке, очередь и экспорт сохранены.
+Обновление: замените файлы в прежней папке расширения, нажмите «Обновить»
+в chrome://extensions, затем обновите исходную вкладку Facebook, чтобы
+загрузить новый content script. Кнопки и порядок работы прежние.
+Старая выгрузка JSON не переписывается и отсутствующий в ней текст не восстанавливается.
+
+Проверки локальные: реальный JS расширения в Chromium и тестовые DOM-сценарии,
+218 ссылок ответов из bur-raw-backpackIL-2026-10-25 (2).json.
+Этот JSON содержит 50 постов, 423 комментария, 218 reply, 35 text == author,
+9 ошибок перекрытия и 3 ошибки отсутствующей карточки.
+HTML живого Facebook в выгрузке отсутствует: DOM-регрессии моделируют сценарий.
+ЖИВОЙ FACEBOOK ПОСЛЕ ИСПРАВЛЕНИЙ НЕ ПРОВЕРЕН. Нужен пользовательский прогон.
+
+
+Полный набор: 16/16 PASS.
+test-comment-upgrade.js: PASS
+test-scroll.js: PASS
+test-worker.js: PASS
+test_comments_dom.py: PASS
+test_content_integration.py: PASS
+test_export_browser.py: PASS
+test_extension_export.py: PASS
+test_live054_regressions.py: PASS
+test_modal_browser.py: PASS
+test_nested_replies_dom.py: PASS
+test_permalink_fallback.py: PASS
+test_popup_flow.py: PASS
+test_post_detail_browser.py: PASS
+test_reply_dialog_integration.py: PASS
+test_scroll_browser.py: PASS
+test_short_post_reply_dialog.py: PASS
+Все JS: node --check PASS.
+Полный ZIP проверен testzip и manifest/resources.

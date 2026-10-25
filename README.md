@@ -1,3 +1,9 @@
+## FB Бур: актуальное расширение Chrome
+
+Последняя сборка — **0.5.5-alpha**. [Скачать полный ZIP](releases/bur-collector-0.5.5-alpha-FULL.zip).
+[Состояние и передача контекста](bur-extension/HANDOFF.md) · [Версия и контрольная сумма](bur-extension/LATEST.json).
+16/16 тестов PASS; установка ZIP в отдельном Chromium проверена. Живой Facebook ещё не проверен.
+
 # Pumpkin Latte Collector
 
 Публичный репозиторий содержит код браузерного сборщика. Сами данные Facebook и серверные секреты здесь не хранятся.
