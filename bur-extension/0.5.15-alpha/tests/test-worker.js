@@ -7,7 +7,7 @@ function request(tx,run){const r={};tx.pending++;setImmediate(()=>{try{r.result=
 class TX {constructor(){this.pending=0;this.complete=false;}completed(){if(!this.pending&&!this.complete){setImmediate(()=>{if(!this.pending&&!this.complete){this.complete=true;this.oncomplete?.();}});}} objectStore(){return {get:key=>request(this,()=>posts.get(key)),put:obj=>request(this,()=>posts.set(obj.key,structuredClone(obj))),delete:key=>request(this,()=>posts.delete(key)),index:()=>({getAll:range=>request(this,()=>[...posts.values()].filter(p=>p.group===range.group)),openKeyCursor:range=>{let keys=[...posts.values()].filter(p=>p.group===range.group).map(p=>p.key),ix=0;const r={};const advance=()=>{if(ix>=keys.length){r.result=null;r.onsuccess?.();return;}r.result={primaryKey:keys[ix++],continue:()=>setImmediate(advance)};r.onsuccess?.();};this.pending++;setImmediate(()=>{advance();this.pending--;this.completed();});return r;}})};}}
 class DB{constructor(){this.objectStoreNames={contains:()=>true};}transaction(){return new TX();}close(){}createObjectStore(){return{createIndex(){}};}}
 const indexedDB={open:()=>{const r={result:new DB()};setImmediate(()=>{r.onupgradeneeded?.();r.onsuccess?.();});return r;}},IDBKeyRange={only:group=>({group})};
-const chrome={runtime:{onMessage:{addListener:cb=>sendListener=cb},onInstalled:{addListener(){}},getURL:s=>'chrome-extension://test/'+s},storage:{local:{get:async k=>({[k]:storage[k]}),set:async o=>Object.assign(storage,o)}},tabs:{get:async id=>{assert.ok([5,6].includes(id));return id===5?tab:otherTab;},update:async(id,data)=>{assert.ok([5,6].includes(id));const target=id===5?tab:otherTab;Object.assign(target,data);return target;},sendMessage:async(id,msg)=>{assert.ok([5,6].includes(id));if(!connected)throw Error('no receiver');if(msg.type==='burPing')return {ready:true,version:'0.5.14-alpha',obstruction:modalOpen?{kind:'facebook_dialog'}:null,detailPost:expectedModal};return {ready:true};},create:async()=>{},onUpdated:{addListener:cb=>tabUpdatedListener=cb}},scripting:{executeScript:async()=>{injections++;connected=true;}},alarms:{create(){},onAlarm:{addListener:cb=>alarmListener=cb}}};
+const chrome={runtime:{onMessage:{addListener:cb=>sendListener=cb},onInstalled:{addListener(){}},getURL:s=>'chrome-extension://test/'+s},storage:{local:{get:async k=>({[k]:storage[k]}),set:async o=>Object.assign(storage,o)}},tabs:{get:async id=>{assert.ok([5,6].includes(id));return id===5?tab:otherTab;},update:async(id,data)=>{assert.ok([5,6].includes(id));const target=id===5?tab:otherTab;Object.assign(target,data);return target;},sendMessage:async(id,msg)=>{assert.ok([5,6].includes(id));if(!connected)throw Error('no receiver');if(msg.type==='burPing')return {ready:true,version:'0.5.15-alpha',obstruction:modalOpen?{kind:'facebook_dialog'}:null,detailPost:expectedModal};return {ready:true};},create:async()=>{},onUpdated:{addListener:cb=>tabUpdatedListener=cb}},scripting:{executeScript:async()=>{injections++;connected=true;}},alarms:{create(){},onAlarm:{addListener:cb=>alarmListener=cb}}};
 function spawn(){const context={chrome,indexedDB,IDBKeyRange,URL,console,setTimeout,clearTimeout,Date,structuredClone,fetch:()=>{requests++;throw Error('MUST NOT call model or API')}};context.globalThis=context;const ctx=vm.createContext(context);context.importScripts=(...files)=>{for(const f of files)vm.runInContext(fs.readFileSync(path.join(root,f),'utf8'),ctx,{filename:f});};vm.runInContext(fs.readFileSync(path.join(root,'background.js'),'utf8'),ctx,{filename:'background.js'});}
 function call(type,msg={},sender=['start','resume','pause','collectFound','status','exportSlice'].includes(type)?{}:{tab:{...tab}}){return new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Timed out: '+type)),8000);sendListener({type,...msg},sender,r=>{clearTimeout(timeout);r.ok?resolve(r.result):reject(Error(r.error));});});}
 function makePost(i){const id=String(1700000000000000+i);return {group:'backpackIL',post_id:id,permalink:'https://www.facebook.com/groups/backpackIL/posts/'+id+'/',post_text:'Публикация '+i+' про котов, рекламу, маршрут или что угодно',post_text_quality:'body_selector',comments:[]};}
@@ -28,13 +28,13 @@ async function exportSaved(expected){
  const status={get textContent(){return text},set textContent(v){text=v;if(v.startsWith('Ошибка:'))finish();}};
  const button={};
  const ExportURL={createObjectURL:blob=>{downloaded=blob;return 'blob:test'},revokeObjectURL(){}};
- const ctx=vm.createContext({chrome:{runtime:{getManifest:()=>({version_name:'0.5.14-alpha'}),sendMessage:msg=>new Promise(resolve=>sendListener(msg,sender,resolve))}},document:{getElementById:id=>id==='status'?status:button,body:{appendChild(){}},createElement:()=>({click:()=>finish(),remove(){}})},URL:ExportURL,Blob,setTimeout:()=>0,Date,console});
+ const ctx=vm.createContext({chrome:{runtime:{getManifest:()=>({version_name:'0.5.15-alpha'}),sendMessage:msg=>new Promise(resolve=>sendListener(msg,sender,resolve))}},document:{getElementById:id=>id==='status'?status:button,body:{appendChild(){}},createElement:()=>({click:()=>finish(),remove(){}})},URL:ExportURL,Blob,setTimeout:()=>0,Date,console});
  vm.runInContext(fs.readFileSync(path.join(root,'export.js'),'utf8'),ctx);
  let timeout;await Promise.race([done,new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('Export timeout: '+text)),8000)})]).finally(()=>clearTimeout(timeout));
  assert.ok(downloaded,'export failed: '+text);
  const data=JSON.parse(await downloaded.text());
  assert.equal(data.posts.length,expected);
- assert.equal(data.collector_version,'0.5.14-alpha');
+ assert.equal(data.collector_version,'0.5.15-alpha');
  assert.deepEqual(data.posts,JSON.parse(JSON.stringify([...posts.values()].filter(p=>p.group===data.group).sort((a,b)=>a.key.localeCompare(b.key)))));
  assert.deepEqual(data.posts.map(p=>p.key),[...posts.values()].filter(p=>p.group===data.group).map(p=>p.key).sort());
  assert.equal(JSON.stringify({storage,posts:[...posts]}),snapshot,'export must not mutate saved archive/job');
@@ -97,8 +97,21 @@ async function exportSaved(expected){
  for(let i=1;i<5;i++){j=await call('status');assert.equal(j.stage,'deep');assert.equal(j.queue[j.index],makePost(i).post_id);if(i===2)await call('deepError',{id:makePost(i).post_id,error:'Публикация удалена'});else await call('deepSnapshot',{post:{...makePost(i),comments:[{id:'c'+i,text:'Текст комментария '+i,author:'Автор'}]},expanded:2,scrolled:4});}
  j=await call('status');assert.equal(j.stage,'done');assert.equal(j.deepDone,3);assert.equal(j.deepErrors,2);assert.equal(j.queue.length,5);const exported=await call('exportSlice',{offset:0,limit:50});assert.equal(exported.total,5);assert.equal(exported.items.filter(p=>p.deep?.status==='failed').length,2);assert.equal(exported.items.filter(p=>p.deep?.status==='captured_unverified').length,3);
  await exportSaved(5);
- // A new run resets only the current group's local corpus, no migrations/import.
- tab.url='https://www.facebook.com/groups/backpackIL/';await call('start',{tabId:5,url:tab.url,options:{maxPosts:100}});assert.equal((await call('exportSlice',{offset:0,limit:50})).total,0);
+ // 0.5.15 continuation: a completed package persists its last queue post as the per-group checkpoint.
+ assert.equal(storage['burCollectorCheckpoints-v05'].backpackIL.post_id,makePost(4).post_id);
+ tab.url='https://www.facebook.com/groups/backpackIL/';
+ j=await call('start',{tabId:5,url:tab.url,options:{maxPosts:100}});
+ assert.equal(j.checkpointPending,true);assert.equal(j.checkpointPostId,makePost(4).post_id);assert.equal((await call('exportSlice',{offset:0,limit:50})).total,0);
+ // Cards before and including the checkpoint are not saved; collection begins strictly after it.
+ let cp=await call('discover',{posts:[makePost(900),makePost(4),makePost(5),makePost(6)],step:1});
+ j=await call('status');assert.equal(cp.seekingCheckpoint,false);assert.equal(j.checkpointFound,true);assert.equal(j.discovered,2);
+ assert.deepEqual((await call('exportSlice',{offset:0,limit:50})).items.map(p=>p.post_id).sort(),[makePost(5).post_id,makePost(6).post_id].sort());
+ // Starting another package with the same checkpoint and no matching card must stop safely.
+ await call('pause');j=await call('start',{tabId:5,url:tab.url,replacePaused:true,options:{maxPosts:100}});
+ assert.equal(j.checkpointPending,true);cp=await call('discover',{posts:[makePost(901),makePost(902)],step:1,exhausted:true});
+ j=await call('status');assert.equal(j.stage,'stalled');assert.equal(j.paused,true);assert.equal(j.discovered,0);assert.match(j.note,/Контрольная точка/);
+ // Manual reset exists only as a recovery path; normal packages keep the checkpoint automatically.
+ j=await call('resetCheckpoint',{group:'backpackIL'});assert.equal(j.stage,'discover');assert.equal(j.paused,false);assert.equal(j.checkpointPostId,null);assert.equal(storage['burCollectorCheckpoints-v05'].backpackIL,undefined);
  const fixture=process.env.BUR_53_FIXTURE?JSON.parse(fs.readFileSync(process.env.BUR_53_FIXTURE,'utf8')):{posts:Array.from({length:53},(_,i)=>makePost(i+100))};assert.equal(fixture.posts.length,53);
  await call('discover',{posts:fixture.posts,step:1});j=await call('status');assert.equal(j.stage,'discover');assert.equal(j.discovered,53);
  // One button does everything: finish scan, immediately navigate first post. No 'resume' click.
