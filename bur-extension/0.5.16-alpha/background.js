@@ -47,7 +47,7 @@ async function start({tabId,url,options={},replacePaused=false,startAfter=null})
  if(manual)await setPageCheckpoint(tabId,group,manual);
  await clearGroup(group);
  const j={id:now().toString(36),group,tabId,stage:'discover',paused:false,startedAt:now(),lastSeen:now(),steps:0,discovered:0,deepDone:0,deepErrors:0,queue:[],index:0,options:opts,
-  checkpointPostId:checkpoint?.post_id||null,checkpointPending:Boolean(checkpoint?.post_id),checkpointFound:false,checkpointScanSteps:0,checkpointSource:manual?'manual':(checkpoint?.migrated_from_job?'migrated':'stored'),
+  checkpointPostId:checkpoint?.post_id||null,checkpointPending:Boolean(checkpoint?.post_id),checkpointFound:false,checkpointScanSteps:0,checkpointSource:manual?'manual':(checkpoint?.recovered_after_reinstall?'facebook_localstorage':(checkpoint?.migrated_from_job?'migrated':'stored')),
   note:checkpoint?.post_id?'Ищу контрольную точку '+checkpoint.post_id+(manual?' (задана вручную)':'')+'; новый пакет начнётся со следующей публикации':'Разведка: первый пакет, сбор ВСЕХ доступных публикаций без оценки содержания'};
  await setJob(j);await notifyTab(tabId);return j;
 }
