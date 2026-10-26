@@ -19,8 +19,8 @@ function visibleDialogs(doc,view){
 function obstruction(doc,view,target=null){
  const evidence=target?.querySelector('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"]')||
   [...(target?.querySelectorAll('a[href]')||[])].find(a=>/\/groups\/[^/]+\/(?:posts|permalink)\/\d+/.test(a.getAttribute('href')||'')&&!/[?&](?:reply_)?comment_id=/.test(a.getAttribute('href')||''));
- const first=visibleDialogs(doc,view).find(({el})=>!target||!(el===target||el.contains(target)||(target.contains(el)&&evidence&&el.contains(evidence))));if(!first)return null;const el=first.el;
- return {kind:'facebook_dialog',role:el.getAttribute('role')||el.tagName.toLowerCase(),coverage:Math.round(first.coverage*100),media:Boolean(el.querySelector('img,video'))};
+ const first=visibleDialogs(doc,view).find(({el})=>!target||!(el===target||el.contains(target)||(target.contains(el)&&evidence&&el.contains(evidence))));if(!first)return null;
+ return dialogBlock(first.el,first.coverage);
 }
 function dialogBlock(el,coverage){
  const raw=(el.innerText||el.textContent||'').trim().replace(/\s+/g,' ').slice(0,280);
