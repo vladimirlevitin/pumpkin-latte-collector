@@ -1,8 +1,8 @@
-/* FB Bur collector-only 0.5.15-alpha. Resilient autonomous queue with per-group continuation checkpoints. */
+/* FB Bur collector-only 0.5.16-alpha. Resilient autonomous queue with per-group continuation checkpoints. */
 importScripts('core.js');
 const C=globalThis.FBBurCore;
 const DB='bur-collector-v05', DBVER=1,JOB_KEY='burCollectorJob-v05',CHECKPOINT_KEY='burCollectorCheckpoints-v05',ALARM='bur-collector-watchdog';
-const VERSION='0.5.15-alpha',now=()=>Date.now();
+const VERSION='0.5.16-alpha',now=()=>Date.now();
 const DEFAULTS={maxPosts:100,maxSteps:900};
 function groupOf(url){try{const u=new URL(url);if(!['www.facebook.com','web.facebook.com'].includes(u.hostname))return null;return decodeURIComponent(u.pathname.match(/^\/groups\/([^/]+)/)?.[1]||'')||null;}catch{return null;}}
 function postIdOf(url,group){return C.idFromPermalink(url,group);}
@@ -37,13 +37,14 @@ async function ensureContent(tabId,group){
  if(!r?.ready||r.version!==VERSION)throw Error('Не удалось подтвердить версию скрипта');
  return r;
 }
-async function start({tabId,url,options={},replacePaused=false}){const group=groupOf(url);if(!group||!/^\/groups\/[^/]+\/?$/.test(new URL(url).pathname))throw Error('Откройте ленту нужной Facebook-группы');await ensureContent(tabId,group);const existing=await getJob();if(existing&&existing.stage!=='done'&&!(replacePaused&&existing.paused))throw Error('Сбор уже существует: нажмите «Продолжить» либо поставьте его на паузу перед запуском другой группы.');
+async function start({tabId,url,options={},replacePaused=false,startAfter=null}){const group=groupOf(url);if(!group||!/^\/groups\/[^/]+\/?$/.test(new URL(url).pathname))throw Error('Откройте ленту нужной Facebook-группы');await ensureContent(tabId,group);const existing=await getJob();if(existing&&existing.stage!=='done'&&!(replacePaused&&existing.paused))throw Error('Сбор уже существует: нажмите «Продолжить» либо поставьте его на паузу перед запуском другой группы.');
  const opts={maxPosts:Math.max(5,Math.min(5000,Math.trunc(Number(options.maxPosts)||DEFAULTS.maxPosts))),maxSteps:Math.max(30,Math.min(15000,Math.trunc(Number(options.maxSteps)||DEFAULTS.maxSteps)))};
- const checkpoint=await checkpointForStart(group,existing);
+ const manual=String(startAfter||'').trim();if(manual&&!/^\d{8,30}$/.test(manual))throw Error('post_id должен состоять только из цифр');
+ const checkpoint=manual?await setCheckpoint(group,manual,{manual:true,source:'popup'}):await checkpointForStart(group,existing);
  await clearGroup(group);
  const j={id:now().toString(36),group,tabId,stage:'discover',paused:false,startedAt:now(),lastSeen:now(),steps:0,discovered:0,deepDone:0,deepErrors:0,queue:[],index:0,options:opts,
-  checkpointPostId:checkpoint?.post_id||null,checkpointPending:Boolean(checkpoint?.post_id),checkpointFound:false,checkpointScanSteps:0,
-  note:checkpoint?.post_id?'Ищу контрольную точку '+checkpoint.post_id+'; новый пакет начнётся со следующей публикации':'Разведка: первый пакет, сбор ВСЕХ доступных публикаций без оценки содержания'};
+  checkpointPostId:checkpoint?.post_id||null,checkpointPending:Boolean(checkpoint?.post_id),checkpointFound:false,checkpointScanSteps:0,checkpointSource:manual?'manual':(checkpoint?.migrated_from_job?'migrated':'stored'),
+  note:checkpoint?.post_id?'Ищу контрольную точку '+checkpoint.post_id+(manual?' (задана вручную)':'')+'; новый пакет начнётся со следующей публикации':'Разведка: первый пакет, сбор ВСЕХ доступных публикаций без оценки содержания'};
  await setJob(j);await notifyTab(tabId);return j;
 }
 async function pause(){const j=await getJob();if(!j)return null;j.paused=true;j.note='Остановлено пользователем';return setJob(j);}
