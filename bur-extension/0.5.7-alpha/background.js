@@ -34,7 +34,7 @@ async function start({tabId,url,options={},replacePaused=false}){const group=gro
 }
 async function pause(){const j=await getJob();if(!j)return null;j.paused=true;j.note='Остановлено пользователем';return setJob(j);}
 async function resume(tabId,url){const j=await getJob();if(!j)throw Error('Нет задания');if(j.stage==='done')throw Error('Задание завершено. Запустите новый сбор.');
- if(tabId!==j.tabId)throw Error('Задание привязано к исходной вкладке группы '+j.group+'. Вернитесь в неё.');if(groupOf(url)!==j.group)throw Error('Задание привязано к группе '+j.group+'. Текущая вкладка открыта в другой группе; переход отменён.');
+ if(tabId!==j.tabId)throw Error('Задание привязано к исходной вкладке группы '+j.group+'. Вернитесь в неё.');const currentGroup=groupOf(url);if(currentGroup&&currentGroup!==j.group)throw Error('Задание привязано к группе '+j.group+'. Текущая вкладка открыта в другой группе; переход отменён.');
  await chrome.tabs.get(j.tabId);
  j.paused=false;j.resumeCount=(j.resumeCount||0)+1;
  if(j.stage==='stalled'){j.stage=['discover','deep'].includes(j.stall?.resumeStage)?j.stall.resumeStage:'discover';if(j.stage==='discover'&&j.steps>=j.options.maxSteps)j.options.maxSteps+=200;}
