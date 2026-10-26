@@ -73,8 +73,19 @@ async function ensureContent(tabId,group){
  const tab=await chrome.tabs.get(tabId);
  if(groupOf(tab.url)!==group)throw Error('Вкладка ещё не открыта в нужной Facebook-группе');
  let r;try{r=await chrome.tabs.sendMessage(tabId,{type:'burPing'});}catch{}
- if(!r?.ready||r.version!==VERSION){try{await chrome.scripting.executeScript({target:{tabId},files:['core.js','feed-scroll.js','content.js']});r=await chrome.tabs.sendMessage(tabId,{type:'burPing'});}catch(e){throw Error('Скрипт не подключился: '+safeError(e)+'. Обновите вкладку Facebook.');}}
- if(!r?.ready||r.version!==VERSION)throw Error('Не удалось подтвердить версию скрипта');
+ // If an older Bur content script is still alive in an already-open Facebook tab,
+ // injecting the new file cannot safely remove the old listener. Reload the tab once;
+ // manifest content_scripts will then start ONLY the current version.
+ if(r?.ready&&r.version!==VERSION){
+  await chrome.tabs.reload(tabId);
+  for(let i=0;i<30;i++){
+   await new Promise(resolve=>setTimeout(resolve,300));
+   try{r=await chrome.tabs.sendMessage(tabId,{type:'burPing'});}catch{r=null;}
+   if(r?.ready&&r.version===VERSION)break;
+  }
+ }
+ if(!r?.ready){try{await chrome.scripting.executeScript({target:{tabId},files:['core.js','feed-scroll.js','content.js']});r=await chrome.tabs.sendMessage(tabId,{type:'burPing'});}catch(e){throw Error('Скрипт не подключился: '+safeError(e)+'. Обновите вкладку Facebook.');}}
+ if(!r?.ready||r.version!==VERSION)throw Error('Не удалось подтвердить версию скрипта '+VERSION);
  return r;
 }
 async function start({tabId,url,options={},replacePaused=false,startAfter=null}){const group=groupOf(url);if(!group||!/^\/groups\/[^/]+\/?$/.test(new URL(url).pathname))throw Error('Откройте ленту нужной Facebook-группы');await ensureContent(tabId,group);const existing=await getJob();if(existing&&existing.stage!=='done'&&!(replacePaused&&existing.paused))throw Error('Сбор уже существует: нажмите «Продолжить» либо поставьте его на паузу перед запуском другой группы.');
