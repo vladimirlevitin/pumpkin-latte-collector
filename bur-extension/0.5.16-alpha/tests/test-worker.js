@@ -122,6 +122,12 @@ async function exportSaved(expected){
  cp=await call('discover',{posts:[makePost(776),makePost(777),makePost(778),makePost(779)],step:1});
  j=await call('status');assert.equal(cp.seekingCheckpoint,false);assert.equal(j.checkpointFound,true);assert.equal(j.discovered,2);
  assert.deepEqual((await call('exportSlice',{offset:0,limit:50})).items.map(p=>p.post_id).sort(),[makePost(778).post_id,makePost(779).post_id].sort());
+ assert.equal(pageCheckpoints.backpackIL,manualId);
+ // Simulate reinstall/new extension storage: extension-local state disappears, Facebook-origin checkpoint remains.
+ delete storage['burCollectorCheckpoints-v05'];delete storage['burCollectorJob-v05'];posts.clear();spawn();
+ j=await call('start',{tabId:5,url:tab.url,options:{maxPosts:100}});
+ assert.equal(j.checkpointPostId,manualId);assert.equal(j.checkpointPending,true);assert.equal(j.checkpointSource,'facebook_localstorage');
+ assert.equal(storage['burCollectorCheckpoints-v05'].backpackIL.post_id,manualId);
  await call('pause');await call('resetCheckpoint',{group:'backpackIL'});
  j=await call('start',{tabId:5,url:tab.url,replacePaused:true,options:{maxPosts:100}});
  assert.equal(j.checkpointPostId,null);assert.equal(j.checkpointPending,false);
