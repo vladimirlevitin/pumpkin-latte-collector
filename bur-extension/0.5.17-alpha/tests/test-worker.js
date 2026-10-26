@@ -7,10 +7,11 @@ function request(tx,run){const r={};tx.pending++;setImmediate(()=>{try{r.result=
 class TX {constructor(){this.pending=0;this.complete=false;}completed(){if(!this.pending&&!this.complete){setImmediate(()=>{if(!this.pending&&!this.complete){this.complete=true;this.oncomplete?.();}});}} objectStore(){return {get:key=>request(this,()=>posts.get(key)),put:obj=>request(this,()=>posts.set(obj.key,structuredClone(obj))),delete:key=>request(this,()=>posts.delete(key)),index:()=>({getAll:range=>request(this,()=>[...posts.values()].filter(p=>p.group===range.group)),openKeyCursor:range=>{let keys=[...posts.values()].filter(p=>p.group===range.group).map(p=>p.key),ix=0;const r={};const advance=()=>{if(ix>=keys.length){r.result=null;r.onsuccess?.();return;}r.result={primaryKey:keys[ix++],continue:()=>setImmediate(advance)};r.onsuccess?.();};this.pending++;setImmediate(()=>{advance();this.pending--;this.completed();});return r;}})};}}
 class DB{constructor(){this.objectStoreNames={contains:()=>true};}transaction(){return new TX();}close(){}createObjectStore(){return{createIndex(){}};}}
 const indexedDB={open:()=>{const r={result:new DB()};setImmediate(()=>{r.onupgradeneeded?.();r.onsuccess?.();});return r;}},IDBKeyRange={only:group=>({group})};
-const chrome={runtime:{onMessage:{addListener:cb=>sendListener=cb},onInstalled:{addListener(){}},getURL:s=>'chrome-extension://test/'+s},storage:{local:{get:async k=>({[k]:storage[k]}),set:async o=>Object.assign(storage,o)}},tabs:{get:async id=>{assert.ok([5,6].includes(id));return id===5?tab:otherTab;},update:async(id,data)=>{assert.ok([5,6].includes(id));const target=id===5?tab:otherTab;Object.assign(target,data);return target;},sendMessage:async(id,msg)=>{assert.ok([5,6].includes(id));if(!connected)throw Error('no receiver');if(msg.type==='burPing')return {ready:true,version:'0.5.16-alpha',obstruction:modalOpen?{kind:'facebook_dialog'}:null,detailPost:expectedModal};if(msg.type==='burCheckpointGet')return {post_id:pageCheckpoints[msg.group]||null};if(msg.type==='burCheckpointSet'){if(msg.post_id)pageCheckpoints[msg.group]=String(msg.post_id);else delete pageCheckpoints[msg.group];return {ok:true};}return {ready:true};},create:async()=>{},onUpdated:{addListener:cb=>tabUpdatedListener=cb}},scripting:{executeScript:async()=>{injections++;connected=true;}},alarms:{create(){},onAlarm:{addListener:cb=>alarmListener=cb}}};
+const chrome={runtime:{onMessage:{addListener:cb=>sendListener=cb},onInstalled:{addListener(){}},getURL:s=>'chrome-extension://test/'+s},storage:{local:{get:async k=>({[k]:storage[k]}),set:async o=>Object.assign(storage,o)}},tabs:{get:async id=>{assert.ok([5,6].includes(id));return id===5?tab:otherTab;},update:async(id,data)=>{assert.ok([5,6].includes(id));const target=id===5?tab:otherTab;Object.assign(target,data);return target;},sendMessage:async(id,msg)=>{assert.ok([5,6].includes(id));if(!connected)throw Error('no receiver');if(msg.type==='burPing')return {ready:true,version:'0.5.17-alpha',obstruction:modalOpen?{kind:'facebook_dialog'}:null,detailPost:expectedModal};if(msg.type==='burCheckpointGet')return {post_id:pageCheckpoints[msg.group]||null};if(msg.type==='burCheckpointSet'){if(msg.post_id)pageCheckpoints[msg.group]=String(msg.post_id);else delete pageCheckpoints[msg.group];return {ok:true};}return {ready:true};},create:async()=>{},onUpdated:{addListener:cb=>tabUpdatedListener=cb}},scripting:{executeScript:async()=>{injections++;connected=true;}},alarms:{create(){},onAlarm:{addListener:cb=>alarmListener=cb}}};
 function spawn(){const context={chrome,indexedDB,IDBKeyRange,URL,console,setTimeout,clearTimeout,Date,structuredClone,fetch:()=>{requests++;throw Error('MUST NOT call model or API')}};context.globalThis=context;const ctx=vm.createContext(context);context.importScripts=(...files)=>{for(const f of files)vm.runInContext(fs.readFileSync(path.join(root,f),'utf8'),ctx,{filename:f});};vm.runInContext(fs.readFileSync(path.join(root,'background.js'),'utf8'),ctx,{filename:'background.js'});}
 function call(type,msg={},sender=['start','resume','pause','collectFound','status','exportSlice'].includes(type)?{}:{tab:{...tab}}){return new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Timed out: '+type)),8000);sendListener({type,...msg},sender,r=>{clearTimeout(timeout);r.ok?resolve(r.result):reject(Error(r.error));});});}
 function makePost(i){const id=String(1700000000000000+i);return {group:'backpackIL',post_id:id,permalink:'https://www.facebook.com/groups/backpackIL/posts/'+id+'/',post_text:'Публикация '+i+' про котов, рекламу, маршрут или что угодно',post_text_quality:'body_selector',comments:[]};}
+function obs(post,top,height=80){return {post,top,bottom:top+height,visible:top+height>0&&top<800,viewportHeight:800};}
 
 // Run the shipped export page against the real background message listener,
 // including MessageSender.tab (extension pages opened in tabs have it too).
@@ -28,13 +29,13 @@ async function exportSaved(expected){
  const status={get textContent(){return text},set textContent(v){text=v;if(v.startsWith('Ошибка:'))finish();}};
  const button={};
  const ExportURL={createObjectURL:blob=>{downloaded=blob;return 'blob:test'},revokeObjectURL(){}};
- const ctx=vm.createContext({chrome:{runtime:{getManifest:()=>({version_name:'0.5.16-alpha'}),sendMessage:msg=>new Promise(resolve=>sendListener(msg,sender,resolve))}},document:{getElementById:id=>id==='status'?status:button,body:{appendChild(){}},createElement:()=>({click:()=>finish(),remove(){}})},URL:ExportURL,Blob,setTimeout:()=>0,Date,console});
+ const ctx=vm.createContext({chrome:{runtime:{getManifest:()=>({version_name:'0.5.17-alpha'}),sendMessage:msg=>new Promise(resolve=>sendListener(msg,sender,resolve))}},document:{getElementById:id=>id==='status'?status:button,body:{appendChild(){}},createElement:()=>({click:()=>finish(),remove(){}})},URL:ExportURL,Blob,setTimeout:()=>0,Date,console});
  vm.runInContext(fs.readFileSync(path.join(root,'export.js'),'utf8'),ctx);
  let timeout;await Promise.race([done,new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('Export timeout: '+text)),8000)})]).finally(()=>clearTimeout(timeout));
  assert.ok(downloaded,'export failed: '+text);
  const data=JSON.parse(await downloaded.text());
  assert.equal(data.posts.length,expected);
- assert.equal(data.collector_version,'0.5.16-alpha');
+ assert.equal(data.collector_version,'0.5.17-alpha');
  assert.deepEqual(data.posts,JSON.parse(JSON.stringify([...posts.values()].filter(p=>p.group===data.group).sort((a,b)=>a.key.localeCompare(b.key)))));
  assert.deepEqual(data.posts.map(p=>p.key),[...posts.values()].filter(p=>p.group===data.group).map(p=>p.key).sort());
  assert.equal(JSON.stringify({storage,posts:[...posts]}),snapshot,'export must not mutate saved archive/job');
@@ -97,37 +98,81 @@ async function exportSaved(expected){
  for(let i=1;i<5;i++){j=await call('status');assert.equal(j.stage,'deep');assert.equal(j.queue[j.index],makePost(i).post_id);if(i===2)await call('deepError',{id:makePost(i).post_id,error:'Публикация удалена'});else await call('deepSnapshot',{post:{...makePost(i),comments:[{id:'c'+i,text:'Текст комментария '+i,author:'Автор'}]},expanded:2,scrolled:4});}
  j=await call('status');assert.equal(j.stage,'done');assert.equal(j.deepDone,3);assert.equal(j.deepErrors,2);assert.equal(j.queue.length,5);const exported=await call('exportSlice',{offset:0,limit:50});assert.equal(exported.total,5);assert.equal(exported.items.filter(p=>p.deep?.status==='failed').length,2);assert.equal(exported.items.filter(p=>p.deep?.status==='captured_unverified').length,3);
  await exportSaved(5);
- // 0.5.16 continuation: a completed package persists its last queue post as the per-group checkpoint.
- assert.equal(storage['burCollectorCheckpoints-v05'].backpackIL.post_id,makePost(4).post_id);
+ // 0.5.17 continuation: finished package stores a TRUSTED feed-order checkpoint.
+ assert.equal(storage['burCollectorCheckpoints-v0517'].backpackIL.post_id,makePost(4).post_id);
+ assert.equal(storage['burCollectorCheckpoints-v0517'].backpackIL.algorithm,'feed_geometry_v1');
+ assert.equal(pageCheckpoints.backpackIL,makePost(4).post_id);
+ tab.url='https://www.facebook.com/groups/backpackIL/';
+ j=await call('start',{tabId:5,url:tab.url,options:{maxPosts:5,maxSteps:100}});
+ assert.equal(j.checkpointPending,true);assert.equal(j.checkpointPostId,makePost(4).post_id);
+ assert.equal((await call('exportSlice',{offset:0,limit:50})).total,0);
+
+ // LIVE 0.5.16 REGRESSION: DOM array order is deliberately WRONG. Geometry is the truth.
+ // First cycle: checkpoint is prefetched BELOW the viewport. Bur must only scroll and save NOTHING.
+ let cp=await call('discover',{viewportHeight:800,step:1,observations:[
+   obs(makePost(4),1500),obs(makePost(2),300),obs(makePost(900),1800),obs(makePost(0),-500),obs(makePost(1),100),obs(makePost(3),600)
+ ]});
+ j=await call('status');
+ assert.equal(cp.seekingCheckpoint,true);assert.equal(j.discovered,0);
+ assert.equal((await call('exportSlice',{offset:0,limit:50})).total,0);
+ assert.ok(j.checkpointSeenIds.includes(makePost(0).post_id));
+ assert.ok(j.checkpointSeenIds.includes(makePost(3).post_id));
+ assert.ok(!j.checkpointSeenIds.includes(makePost(900).post_id),'prefetched card below viewport must not be marked old');
+
+ // Second cycle: checkpoint enters viewport. Input array still scrambled.
+ // Only cards PHYSICALLY BELOW checkpoint may enter the new package.
+ cp=await call('discover',{viewportHeight:800,step:1,observations:[
+   obs(makePost(6),1200),obs(makePost(1),-400),obs(makePost(5),900),obs(makePost(4),500),obs(makePost(3),-100)
+ ]});
+ j=await call('status');
+ assert.equal(cp.seekingCheckpoint,false);assert.equal(j.checkpointFound,true);assert.equal(j.discovered,2);
+ assert.deepEqual(j.discoveryOrder,[makePost(5).post_id,makePost(6).post_id]);
+ assert.deepEqual((await call('exportSlice',{offset:0,limit:50})).items.map(p=>p.post_id).sort(),[makePost(5).post_id,makePost(6).post_id].sort());
+ assert.ok(!(await call('exportSlice',{offset:0,limit:50})).items.some(p=>p.post_id===makePost(4).post_id),'checkpoint itself must never be saved');
+
+ // Third cycle: Facebook keeps OLD cards in DOM. They must remain blocked; only new ids append.
+ cp=await call('discover',{viewportHeight:800,step:1,observations:[
+   obs(makePost(8),900),obs(makePost(2),-350),obs(makePost(7),500),obs(makePost(5),-100),obs(makePost(9),1300),obs(makePost(4),-700)
+ ]});
+ j=await call('status');
+ assert.equal(j.stage,'deep');assert.deepEqual(j.queue,[makePost(5).post_id,makePost(6).post_id,makePost(7).post_id,makePost(8).post_id,makePost(9).post_id]);
+ const previousPackage=new Set([0,1,2,3,4].map(i=>makePost(i).post_id));
+ assert.equal(j.queue.filter(id=>previousPackage.has(id)).length,0,'new package must have ZERO overlap with previous package');
+ assert.equal(j.queue.length,5);
+
+ // Deep pass preserves discovery order; the LAST feed-order id becomes the next trusted checkpoint.
+ for(const id of [...j.queue]){
+   const p=[5,6,7,8,9].map(makePost).find(x=>x.post_id===id);
+   j=await call('status');assert.equal(j.queue[j.index],id);
+   await call('deepSnapshot',{post:p,expanded:0,scrolled:0});
+ }
+ j=await call('status');assert.equal(j.stage,'done');assert.equal(j.lastCollectedPostId,makePost(9).post_id);
+ assert.equal(storage['burCollectorCheckpoints-v0517'].backpackIL.post_id,makePost(9).post_id);
+ assert.equal(pageCheckpoints.backpackIL,makePost(9).post_id);
+
+ // Blank next start automatically reuses the trusted 0.5.17 checkpoint.
  tab.url='https://www.facebook.com/groups/backpackIL/';
  j=await call('start',{tabId:5,url:tab.url,options:{maxPosts:100}});
- assert.equal(j.checkpointPending,true);assert.equal(j.checkpointPostId,makePost(4).post_id);assert.equal((await call('exportSlice',{offset:0,limit:50})).total,0);
- // Cards before and including the checkpoint are not saved; collection begins strictly after it.
- let cp=await call('discover',{posts:[makePost(900),makePost(4),makePost(5),makePost(6)],step:1});
- j=await call('status');assert.equal(cp.seekingCheckpoint,false);assert.equal(j.checkpointFound,true);assert.equal(j.discovered,2);
- assert.deepEqual((await call('exportSlice',{offset:0,limit:50})).items.map(p=>p.post_id).sort(),[makePost(5).post_id,makePost(6).post_id].sort());
- // Starting another package with the same checkpoint and no matching card must stop safely.
- await call('pause');j=await call('start',{tabId:5,url:tab.url,replacePaused:true,options:{maxPosts:100}});
- assert.equal(j.checkpointPending,true);cp=await call('discover',{posts:[makePost(901),makePost(902)],step:1,exhausted:true});
- j=await call('status');assert.equal(j.stage,'stalled');assert.equal(j.paused,true);assert.equal(j.discovered,0);assert.match(j.note,/Контрольная точка/);
- // Manual reset exists only as a recovery path; normal packages keep the checkpoint automatically.
- j=await call('resetCheckpoint',{group:'backpackIL'});assert.equal(j.stage,'discover');assert.equal(j.paused,false);assert.equal(j.checkpointPostId,null);assert.equal(storage['burCollectorCheckpoints-v05'].backpackIL,undefined);
- // Fresh-install recovery: an explicit post_id from the popup overrides missing/stale storage,
- // is persisted, the boundary itself is skipped, and only following posts enter the new package.
+ assert.equal(j.checkpointPostId,makePost(9).post_id);assert.equal(j.checkpointPending,true);
  await call('pause');
+
+ // Old 0.5.16 checkpoint namespace is intentionally ignored.
+ await call('resetCheckpoint',{group:'backpackIL'});
+ storage['burCollectorCheckpoints-v05']={backpackIL:{post_id:makePost(999).post_id}};
+ j=await call('start',{tabId:5,url:tab.url,replacePaused:true,options:{maxPosts:100}});
+ assert.equal(j.checkpointPostId,null);assert.equal(j.checkpointPending,false);
+ await call('pause');
+
+ // Manual seed is trusted once, then survives a new extension storage via Facebook localStorage v2.
  const manualId=makePost(777).post_id;
  j=await call('start',{tabId:5,url:tab.url,replacePaused:true,startAfter:manualId,options:{maxPosts:100}});
  assert.equal(j.checkpointPostId,manualId);assert.equal(j.checkpointPending,true);assert.equal(j.checkpointSource,'manual');
- assert.equal(storage['burCollectorCheckpoints-v05'].backpackIL.post_id,manualId);
- cp=await call('discover',{posts:[makePost(776),makePost(777),makePost(778),makePost(779)],step:1});
- j=await call('status');assert.equal(cp.seekingCheckpoint,false);assert.equal(j.checkpointFound,true);assert.equal(j.discovered,2);
- assert.deepEqual((await call('exportSlice',{offset:0,limit:50})).items.map(p=>p.post_id).sort(),[makePost(778).post_id,makePost(779).post_id].sort());
+ assert.equal(storage['burCollectorCheckpoints-v0517'].backpackIL.post_id,manualId);
  assert.equal(pageCheckpoints.backpackIL,manualId);
- // Simulate reinstall/new extension storage: extension-local state disappears, Facebook-origin checkpoint remains.
- delete storage['burCollectorCheckpoints-v05'];delete storage['burCollectorJob-v05'];posts.clear();spawn();
+ delete storage['burCollectorCheckpoints-v0517'];delete storage['burCollectorJob-v05'];posts.clear();spawn();
  j=await call('start',{tabId:5,url:tab.url,options:{maxPosts:100}});
  assert.equal(j.checkpointPostId,manualId);assert.equal(j.checkpointPending,true);assert.equal(j.checkpointSource,'facebook_localstorage');
- assert.equal(storage['burCollectorCheckpoints-v05'].backpackIL.post_id,manualId);
+ assert.equal(storage['burCollectorCheckpoints-v0517'].backpackIL.post_id,manualId);
  await call('pause');await call('resetCheckpoint',{group:'backpackIL'});
  j=await call('start',{tabId:5,url:tab.url,replacePaused:true,options:{maxPosts:100}});
  assert.equal(j.checkpointPostId,null);assert.equal(j.checkpointPending,false);
