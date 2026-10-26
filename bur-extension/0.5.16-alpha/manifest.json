@@ -2,9 +2,9 @@
   "manifest_version": 3,
   "name": "FB Бур — универсальный коллектор (alpha)",
   "short_name": "FB Бур",
-  "version": "0.5.15",
-  "version_name": "0.5.15-alpha",
-  "description": "Устойчивый автономный сбор пакетами с per-group checkpoint: следующий запуск продолжает после последнего обработанного поста.",
+  "version": "0.5.16",
+  "version_name": "0.5.16-alpha",
+  "description": "Пакетный FB-коллектор с явной и сохранённой точкой продолжения по post_id.",
   "minimum_chrome_version": "116",
   "permissions": [
     "storage",
