@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FB Bur Probe</title>
+<style>
+body{width:330px;margin:0;padding:16px;background:#f6f8fb;color:#172d40;font:14px/1.45 system-ui,Arial,sans-serif}
+h2{margin:0 0 8px;font-size:18px}p{margin:6px 0 12px;color:#51677a}
+button{width:100%;padding:12px;border:0;border-radius:9px;background:#145db8;color:#fff;font:700 15px system-ui;cursor:pointer}
+button:disabled{opacity:.55;cursor:not-allowed}
+#status{white-space:pre-wrap;margin-top:12px;padding:10px;border-radius:8px;background:#e8f0f8;min-height:74px}
+small{display:block;margin-top:10px;color:#65798c}
+</style></head>
+<body>
+<h2>🔎 FB Bur Probe</h2>
+<p>Проверяет только два проблемных поста. Ленту и комментарии не собирает.</p>
+<button id="run">ПРОВЕРИТЬ 2 ПОСТА</button>
+<div id="status">Готов.</div>
+<small>После проверки JSON с диагностикой скачивается автоматически.</small>
+<script src="popup.js"></script>
+</body></html>
