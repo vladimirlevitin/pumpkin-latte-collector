@@ -147,7 +147,7 @@ async function advanceDialog(modal,view,wait){
  return {moved:false,tries};
 }
 async function advanceDetail(doc,view,wait){
- const modal=detailDialog(doc,view);const blocked=obstruction(doc,view,modal);if(blocked)return {moved:false,blocked,tries:[]};if(!modal)return {moved:false,blocked:obstruction(doc,view),tries:[]};
+ const modal=detailDialog(doc,view);const blocked=deepObstruction(doc,view,modal);if(blocked)return {moved:false,blocked,tries:[]};if(!modal)return {moved:false,blocked:obstruction(doc,view),tries:[]};
  return advanceDialog(modal,view,wait);
 }
 return {getCandidates,position,move,advance,obstruction,deepObstruction,visibleDialogs,detailDialog,commentThreadDialog,advanceDialog,advanceDetail};
