@@ -1,11 +1,11 @@
 {
   "product": "FB Бур Chrome extension",
-  "version": "0.5.11-alpha",
-  "branch": "bur/canonical-0.5.11-alpha",
-  "source": "bur-extension/0.5.11-alpha",
-  "source_commit": "e95917f292544688a9b6db923424f59512c04ac0",
-  "zip": "releases/bur-collector-0.5.11-alpha-FULL.zip",
-  "sha256": "aebe5322213b20dcff0e37a314bff6d284d7bd814c6e362720069059e550a3e2",
+  "version": "0.5.12-alpha",
+  "branch": "bur/canonical-0.5.12-alpha",
+  "source": "bur-extension/0.5.12-alpha",
+  "source_commit": "ccc21c43af603978cd91242b75cd16ac87ed726c",
+  "zip": "releases/bur-collector-0.5.12-alpha-FULL.zip",
+  "sha256": "2c27362acbfd7584f3eb3225ffcac2599ccdf12ed56c5903d3a988be50e71a8a",
   "tests": "run-tests.py PASS in GitHub Actions",
   "live_facebook": "NOT TESTED; user live run required"
 }
