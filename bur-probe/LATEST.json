@@ -1,0 +1,8 @@
+{
+  "product": "FB Bur Probe — 2 posts",
+  "version": "0.1.0",
+  "source_commit": "dc35e6cb67466441a615d0bc344393c195eafbc2",
+  "zip": "releases/fb-bur-probe-two-posts-0.1.0.zip",
+  "sha256": "8e6e1ceccf1119b24bc8f90b5e8d8effe390e87e8614ba97bd07bc8219a1b967",
+  "tests": "PASS"
+}
