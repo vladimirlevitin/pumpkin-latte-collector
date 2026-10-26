@@ -1,0 +1,6 @@
+FB Bur 0.5.15-alpha
+
+Added per-group continuation checkpoints.
+A completed package stores its last queue post_id. The next package seeks that id, skips it, and collects only following posts.
+If the checkpoint cannot be found, discovery stalls instead of silently starting from a wrong position.
+Includes migration from a completed prior job and regression coverage for found/missing checkpoints.
