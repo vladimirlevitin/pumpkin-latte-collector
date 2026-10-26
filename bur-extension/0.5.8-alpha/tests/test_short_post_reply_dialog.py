@@ -35,6 +35,9 @@ with sync_playwright() as p:
  page.evaluate('''(job)=>{window.testJob=job;window.snapshots=[];window.obstructions=[];window.errors=[];
  window.chrome={runtime:{sendMessage:async(msg)=>{
   if(msg.type==='status')return {ok:true,result:window.testJob};
+ if(msg.type==='deepReady'){window.testJob.deepPhase='READY';return {ok:true,result:window.testJob};}
+ if(msg.type==='deepExpanding'){window.testJob.deepPhase='EXPANDING';return {ok:true,result:window.testJob};}
+ if(msg.type==='deepMismatch')return {ok:true,result:{waiting:true}};
   if(msg.type==='deepSnapshot'){window.snapshots.push(msg);window.testJob.paused=true;return {ok:true,result:{ok:true}};}
   if(msg.type==='obstructed'){window.obstructions.push(msg);window.testJob.paused=true;return {ok:true,result:{blocked:true}};}
   if(msg.type==='deepError'){window.errors.push(msg);window.testJob.paused=true;return {ok:true,result:{ok:true}};}
