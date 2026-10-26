@@ -104,7 +104,8 @@ function detailDialog(doc,view){
   const raw=(el.innerText||el.textContent||'').trim();
   const body=el.querySelector?.('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"]');
   const article=[...(el.querySelectorAll?.('[role="article"]')||[])].find(x=>(x.innerText||x.textContent||'').trim().length>=120);
-  const fallback=(el.innerText||el.textContent||'').trim().length>=180 &&
+  const titleEvidence=/^(?:Публикация|Post)(?:\s+|$)/iu.test(raw);
+  const fallback=raw.length>=180 &&
     Boolean(el.querySelector?.('[contenteditable="true"],[role="textbox"]'));
   const links=[...el.querySelectorAll('a[href]')].map(a=>{try{return new URL(a.getAttribute('href'),'https://www.facebook.com');}catch{return null;}}).filter(Boolean);
   const postLinks=links.filter(u=>/(^|\.)facebook\.com$/.test(u.hostname)&&/^\/groups\/[^/]+\/(?:posts|permalink)\/\d+\/?$/.test(u.pathname)&&!u.searchParams.has('comment_id')&&!u.searchParams.has('reply_comment_id'));
