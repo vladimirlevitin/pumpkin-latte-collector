@@ -1,0 +1,3 @@
+FB Bur 0.5.16-alpha
+
+Manual start-after post_id recovery plus per-group Facebook-origin checkpoint persistence. The explicit checkpoint is skipped and only following posts enter the next package. Regression tests cover empty extension storage / reinstall recovery.
