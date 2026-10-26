@@ -1,4 +1,4 @@
-/* v0.5.3: structured comment threads + collector-owned reply dialogs. */
+/* FB Bur 0.5.17-alpha: feed-order observations + structured comment threads. */
 (() => {
 'use strict';
 if(window.__burCollector052)return;window.__burCollector052=true;
@@ -14,6 +14,27 @@ function currentCards(group,opts={}){
  if(!nodes.length){const fallback=C.permalinkPostRoot(document,group,location.href);if(fallback)nodes=[fallback];}
  for(const node of nodes){const row=C.extractCard(node,group,location.href);if(row)found.set(row.key,row);}
  return [...found.values()];
+}
+function feedObservations(group){
+ const found=new Map(),vh=Math.max(1,Number(window.innerHeight)||800);
+ for(const node of C.postNodes(document)){
+  const row=C.extractCard(node,group,location.href);if(!row?.post_id)continue;
+  const rect=node.getBoundingClientRect?.();
+  const top=Number.isFinite(rect?.top)?Number(rect.top):null,bottom=Number.isFinite(rect?.bottom)?Number(rect.bottom):null;
+  const visible=top!==null&&bottom!==null&&bottom>0&&top<vh;
+  const overlap=visible?Math.max(0,Math.min(vh,bottom)-Math.max(0,top)):0;
+  const obs={post:row,top,bottom,visible,viewportHeight:vh};
+  const prev=found.get(row.key);
+  // A post can have nested/duplicate wrappers. Keep the geometry with the largest
+  // actual viewport overlap; if neither is visible, keep the one nearest the viewport.
+  const distance=visible?0:top===null?1e12:top>=vh?top-vh:Math.max(0,-bottom);
+  const prevDistance=prev?prev.visible?0:prev.top===null?1e12:prev.top>=vh?prev.top-vh:Math.max(0,-prev.bottom):1e12;
+  if(!prev||overlap>(prev._overlap||0)||(overlap===(prev._overlap||0)&&distance<prevDistance))found.set(row.key,{...obs,_overlap:overlap});
+ }
+ return [...found.values()].map(({_overlap,...x})=>x).sort((a,b)=>{
+  const at=Number.isFinite(a.top)?a.top:Number.POSITIVE_INFINITY,bt=Number.isFinite(b.top)?b.top:Number.POSITIVE_INFINITY;
+  return at-bt||String(a.post.post_id).localeCompare(String(b.post.post_id));
+ });
 }
 function closeOwnedDialog(dialog){
  if(!dialog?.isConnected)return true;
@@ -56,7 +77,8 @@ async function discover(job){
  // Bounded, user-visible interactions; no hidden endpoints or request interception.
  const nodes=C.postNodes(document);C.expandVisible(nodes,12,'post');await delay(450);
  if(await handleObstruction(job,'разведка после раскрытия'))return;
- const cards=currentCards(group);const r=await send('discover',{posts:cards,step:1});
+ const observations=feedObservations(group);
+ const r=await send('discover',{observations,step:1,viewportHeight:Math.max(1,Number(window.innerHeight)||800)});
  if(!r||r.stage!=='discover')return;
  if(r.seekingCheckpoint)noNew=0;else if(r.added)noNew=0;else noNew++;
  const movement=await F.advance(document,window,delay);
@@ -65,9 +87,8 @@ async function discover(job){
  noMove=movement.moved?0:noMove+1;
  if(noNew>=14||noMove>=6){
    await send('endDiscovery',{reason:`Недостаточно данных: без новых ${noNew}, без прокрутки ${noMove}`,
-     diagnostics:{noNew,noMove,scroll:movement.tries,visibleCards:cards.length,href:location.pathname}});
+     diagnostics:{noNew,noMove,scroll:movement.tries,visibleCards:observations.filter(x=>x.visible).length,totalCards:observations.length,href:location.pathname}});
  }
-
 }
 async function deep(job){
  const expected=job.queue[job.index];if(!expected)return;
@@ -138,7 +159,7 @@ async function tick(){if(busy)return;busy=true;try{
  if(j.stage==='discover')await discover(j);else await deep(j);
  }catch(e){console.warn('FB Бур (задание сохранено):',String(e.message||e).slice(0,200));}finally{busy=false;}}
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='burPing'){reply({ready:true,version:'0.5.16-alpha',location:location.pathname,obstruction:F.obstruction(document,window),detailPost:Boolean(F.detailDialog(document,window))});return;}
+ if(msg?.type==='burPing'){reply({ready:true,version:'0.5.17-alpha',location:location.pathname,obstruction:F.obstruction(document,window),detailPost:Boolean(F.detailDialog(document,window))});return;}
  if(msg?.type==='burCheckpointGet'){const group=groupFromURL();if(!group||msg.group!==group){reply({post_id:null});return;}reply({post_id:localStorage.getItem('fb-bur-checkpoint:'+group)||null});return;}
  if(msg?.type==='burCheckpointSet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ok:false});return;}const key='fb-bur-checkpoint:'+group;if(msg.post_id)localStorage.setItem(key,String(msg.post_id));else localStorage.removeItem(key);reply({ok:true});return;}
  if(msg?.type==='burWake')setTimeout(tick,300);
