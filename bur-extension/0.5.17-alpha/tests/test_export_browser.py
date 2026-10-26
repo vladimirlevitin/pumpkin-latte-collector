@@ -11,7 +11,7 @@ with sync_playwright() as p:
   page.set_content(html)
   page.evaluate('''mode => {
    window.calls=[];
-   window.chrome={runtime:{getManifest:()=>({version_name:'0.5.16-alpha'}),sendMessage:async msg=>{
+   window.chrome={runtime:{getManifest:()=>({version_name:'0.5.17-alpha'}),sendMessage:async msg=>{
     window.calls.push(msg);
     if(mode==='ignored')return {ok:true,result:{ignored:true}};
     if(mode==='error')return {ok:false,error:'storage unavailable'};
@@ -25,7 +25,7 @@ with sync_playwright() as p:
  download=event.value
  data=json.loads(Path(download.path()).read_text(encoding='utf-8'))
  assert len(data['posts'])==53 and data['posts'][-1]['comments'][0]['text']=='saved comment 52'
- assert data['collector_version']=='0.5.16-alpha'
+ assert data['collector_version']=='0.5.17-alpha'
  assert page.evaluate('window.calls.map(x=>x.offset)')==[0,50]
  assert download.suggested_filename.startswith('bur-raw-backpackIL-')
  with page.expect_download() as event: page.click('#again')
