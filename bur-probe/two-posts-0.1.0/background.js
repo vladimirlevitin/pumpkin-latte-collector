@@ -86,8 +86,7 @@ ${target.label}
    targets:results
   };
   const dl=await downloadJson(payload);
-  await setState({running:false,text:'Готово.
-Диагностический JSON скачан автоматически.',finished_at:payload.finished_at,last_download:dl,error:null});
+  await setState({running:false,text:'Готово.\\nДиагностический JSON скачан автоматически.',finished_at:payload.finished_at,last_download:dl,error:null});
  }catch(e){
   await setState({running:false,text:'Ошибка щупа: '+String(e?.message||e),finished_at:new Date().toISOString(),error:String(e?.stack||e)});
  }finally{
