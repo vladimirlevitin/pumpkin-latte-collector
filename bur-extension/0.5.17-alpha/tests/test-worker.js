@@ -36,6 +36,8 @@ async function exportSaved(expected){
  const data=JSON.parse(await downloaded.text());
  assert.equal(data.posts.length,expected);
  assert.equal(data.collector_version,'0.5.17-alpha');
+ assert.ok(Array.isArray(data.job_summary.discovery_order),'export must expose discovery_order');
+ assert.equal(data.job_summary.discovery_order.length,expected,'discovery_order must match accepted package size');
  assert.deepEqual(data.posts,JSON.parse(JSON.stringify([...posts.values()].filter(p=>p.group===data.group).sort((a,b)=>a.key.localeCompare(b.key)))));
  assert.deepEqual(data.posts.map(p=>p.key),[...posts.values()].filter(p=>p.group===data.group).map(p=>p.key).sort());
  assert.equal(JSON.stringify({storage,posts:[...posts]}),snapshot,'export must not mutate saved archive/job');
