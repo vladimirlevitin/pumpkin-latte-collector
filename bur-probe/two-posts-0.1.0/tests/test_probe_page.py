@@ -6,7 +6,8 @@ html='''<style>#d{position:fixed;inset:20px;background:white}</style>
 with sync_playwright() as p:
  b=p.chromium.launch(headless=True,args=['--no-sandbox'])
  page=b.new_page(viewport={'width':1200,'height':800})
- page.set_content(html)
+ page.route('https://www.facebook.com/**',lambda route: route.fulfill(status=200,content_type='text/html; charset=utf-8',body=html))
+ page.goto('https://www.facebook.com/')
  page.evaluate("""history.replaceState({},'', '/groups/backpackIL/posts/1761943778250990/photos/pcb.1761943778250990/')""")
  page.evaluate((root/'feed-scroll.js').read_text(encoding='utf-8'))
  page.evaluate("globalThis.__FB_BUR_PROBE_EXPECTED__='1761943778250990'")
