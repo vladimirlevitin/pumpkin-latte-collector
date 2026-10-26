@@ -1,11 +1,11 @@
 {
   "product": "FB Бур Chrome extension",
-  "version": "0.5.14-alpha",
-  "branch": "bur/canonical-0.5.14-alpha",
-  "source": "bur-extension/0.5.14-alpha",
-  "source_commit": "103e2a42116c5324a30ee4b8efde1502e893f379",
-  "zip": "releases/bur-collector-0.5.14-alpha-FULL.zip",
-  "sha256": "ce41bb6e6ea47847ee0d4e00f5bc3d38f72020be579a0c1e383d8fc2524c23ed",
+  "version": "0.5.15-alpha",
+  "branch": "bur/canonical-0.5.15-alpha",
+  "source": "bur-extension/0.5.15-alpha",
+  "source_commit": "062089beb430b79b3be9648b168c6f892727c2bd",
+  "zip": "releases/bur-collector-0.5.15-alpha-FULL.zip",
+  "sha256": "65e8769d8f0d3e60bb970c3e8036b4fa2cac324829092032f081608f8a1f7b96",
   "tests": "run-tests.py PASS in GitHub Actions",
-  "live_facebook": "NOT TESTED; verify the two previously failing post IDs first"
+  "live_facebook": "NOT TESTED; next live check should continue after saved checkpoint in backpackIL"
 }
