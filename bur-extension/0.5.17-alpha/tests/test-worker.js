@@ -128,8 +128,8 @@ async function exportSaved(expected){
  ]});
  j=await call('status');
  assert.equal(cp.seekingCheckpoint,false);assert.equal(j.checkpointFound,true);assert.equal(j.discovered,2);
- assert.deepEqual(j.discoveryOrder,[makePost(5).post_id,makePost(6).post_id]);
- assert.deepEqual((await call('exportSlice',{offset:0,limit:50})).items.map(p=>p.post_id).sort(),[makePost(5).post_id,makePost(6).post_id].sort());
+ assert.equal(j.discoveryOrder.join(','),[makePost(5).post_id,makePost(6).post_id].join(','));
+ assert.equal((await call('exportSlice',{offset:0,limit:50})).items.map(p=>p.post_id).sort().join(','),[makePost(5).post_id,makePost(6).post_id].sort().join(','));
  assert.ok(!(await call('exportSlice',{offset:0,limit:50})).items.some(p=>p.post_id===makePost(4).post_id),'checkpoint itself must never be saved');
 
  // Third cycle: Facebook keeps OLD cards in DOM. They must remain blocked; only new ids append.
@@ -137,7 +137,7 @@ async function exportSaved(expected){
    obs(makePost(8),900),obs(makePost(2),-350),obs(makePost(7),500),obs(makePost(5),-100),obs(makePost(9),1300),obs(makePost(4),-700)
  ]});
  j=await call('status');
- assert.equal(j.stage,'deep');assert.deepEqual(j.queue,[makePost(5).post_id,makePost(6).post_id,makePost(7).post_id,makePost(8).post_id,makePost(9).post_id]);
+ assert.equal(j.stage,'deep');assert.equal(j.queue.join(','),[makePost(5).post_id,makePost(6).post_id,makePost(7).post_id,makePost(8).post_id,makePost(9).post_id].join(','));
  const previousPackage=new Set([0,1,2,3,4].map(i=>makePost(i).post_id));
  assert.equal(j.queue.filter(id=>previousPackage.has(id)).length,0,'new package must have ZERO overlap with previous package');
  assert.equal(j.queue.length,5);
