@@ -36,7 +36,9 @@ function observationsFrom(msg){
  const src=Array.isArray(msg.observations)?msg.observations.slice(0,200):
    (Array.isArray(msg.posts)?msg.posts.slice(0,200).map((post,i)=>({post,top:i*100,bottom:i*100+80,visible:true,viewportHeight:vh})):[]);
  return src.map((o,i)=>{
-   const post=o?.post||o;const top=Number.isFinite(Number(o?.top))?Number(o.top):null,bottom=Number.isFinite(Number(o?.bottom))?Number(o.bottom):null;
+   const post=o?.post||o;
+   const top=o?.top!==null&&o?.top!==undefined&&Number.isFinite(Number(o.top))?Number(o.top):null;
+   const bottom=o?.bottom!==null&&o?.bottom!==undefined&&Number.isFinite(Number(o.bottom))?Number(o.bottom):null;
    return {post,top,bottom,visible:o?.visible===true,viewportHeight:Math.max(1,Number(o?.viewportHeight)||vh),_i:i};
  }).filter(o=>o.post?.post_id).sort((a,b)=>{
    const at=Number.isFinite(a.top)?a.top:Number.POSITIVE_INFINITY,bt=Number.isFinite(b.top)?b.top:Number.POSITIVE_INFINITY;
