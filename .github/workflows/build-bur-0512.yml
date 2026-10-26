@@ -1,0 +1,100 @@
+name: Build FB Bur 0.5.12 release
+
+on:
+  push:
+    branches:
+      - bur/canonical-0.5.12-alpha
+    paths:
+      - .github/workflows/build-bur-0512.yml
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_COMMIT: ccc21c43af603978cd91242b75cd16ac87ed726c
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Extract exact source commit
+        run: |
+          rm -rf /tmp/bur0512
+          mkdir -p /tmp/bur0512
+          git archive "$SOURCE_COMMIT:bur-extension/0.5.12-alpha" | tar -x -C /tmp/bur0512
+          printf '%s\n' "$SOURCE_COMMIT" > /tmp/bur0512/SOURCE-COMMIT.txt
+      - name: Install test dependency
+        run: |
+          python -m pip install --disable-pip-version-check playwright
+          python -m playwright install chromium
+      - name: Verify version hygiene
+        working-directory: /tmp/bur0512
+        run: |
+          python - <<'PY'
+          import json,pathlib
+          root=pathlib.Path('.')
+          m=json.loads((root/'manifest.json').read_text(encoding='utf-8'))
+          assert m['version_name']=='0.5.12-alpha',m
+          assert m['version']=='0.5.12',m
+          stale=[]
+          for p in list(root.rglob('*.js'))+list(root.rglob('*.py')):
+              txt=p.read_text(encoding='utf-8',errors='replace')
+              if '0.5.11-alpha' in txt:
+                  stale.append(str(p))
+          assert not stale,stale
+          print('PASS version hygiene')
+          PY
+      - name: Run regression suite
+        working-directory: /tmp/bur0512
+        run: python run-tests.py
+      - name: Create checksums
+        working-directory: /tmp/bur0512
+        run: |
+          python - <<'PY'
+          import hashlib,pathlib
+          root=pathlib.Path('.')
+          rows=[]
+          for p in sorted(root.rglob('*')):
+              if p.is_file() and p.name!='SHA256SUMS.txt':
+                  rows.append(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.as_posix()}")
+          (root/'SHA256SUMS.txt').write_text('\n'.join(rows)+'\n',encoding='utf-8')
+          PY
+      - name: Build full ZIP
+        run: |
+          python - <<'PY'
+          import pathlib,zipfile
+          src=pathlib.Path('/tmp/bur0512')
+          out=pathlib.Path('releases/bur-collector-0.5.12-alpha-FULL.zip')
+          out.parent.mkdir(parents=True,exist_ok=True)
+          with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:
+              for p in sorted(src.rglob('*')):
+                  if p.is_file(): z.write(p,p.relative_to(src).as_posix())
+          PY
+      - name: Record release metadata
+        run: |
+          SHA=$(sha256sum releases/bur-collector-0.5.12-alpha-FULL.zip | awk '{print $1}')
+          cat > bur-extension/LATEST.json <<EOF
+          {
+            "product": "FB Бур Chrome extension",
+            "version": "0.5.12-alpha",
+            "branch": "bur/canonical-0.5.12-alpha",
+            "source": "bur-extension/0.5.12-alpha",
+            "source_commit": "$SOURCE_COMMIT",
+            "zip": "releases/bur-collector-0.5.12-alpha-FULL.zip",
+            "sha256": "$SHA",
+            "tests": "run-tests.py PASS in GitHub Actions",
+            "live_facebook": "NOT TESTED; user live run required"
+          }
+          EOF
+      - name: Commit release artifact
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add releases/bur-collector-0.5.12-alpha-FULL.zip bur-extension/LATEST.json
+          git commit -m "Release FB Bur 0.5.12-alpha from $SOURCE_COMMIT"
+          git push origin HEAD:bur/canonical-0.5.12-alpha
