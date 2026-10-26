@@ -14,7 +14,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      SOURCE_COMMIT: 372dd87606fa41ae645333309c79486888ea6f68
+      SOURCE_COMMIT: 7dd78184b3ed0e60c4cb215be40b39105925c2fd
     steps:
       - uses: actions/checkout@v4
         with:
