@@ -31,7 +31,7 @@ jobs:
       - name: Install test dependency
         run: |
           python -m pip install --disable-pip-version-check playwright
-          python -m playwright install --with-deps chromium
+          python -m playwright install chromium
       - name: Verify version hygiene
         working-directory: /tmp/bur0511
         run: |
