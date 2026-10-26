@@ -1,6 +1,3 @@
-FB Bur 0.5.15-alpha
+FB Bur 0.5.16-alpha
 
-Added per-group continuation checkpoints.
-A completed package stores its last queue post_id. The next package seeks that id, skips it, and collects only following posts.
-If the checkpoint cannot be found, discovery stalls instead of silently starting from a wrong position.
-Includes migration from a completed prior job and regression coverage for found/missing checkpoints.
+Manual start-after post_id recovery plus per-group Facebook-origin checkpoint persistence. The explicit checkpoint is skipped and only following posts enter the next package. Regression tests cover empty extension storage / reinstall recovery.
