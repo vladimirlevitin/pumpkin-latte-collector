@@ -1,0 +1,12 @@
+FB БУР 0.5.6-alpha — QA
+26 октября 2026 г.
+
+Основание: живой JSON 0.5.5, где stage=done, deep_done=25, deep_errors=25,
+и все 25 ошибок — initial deep obstruction.
+
+Изменён только modal/deep-start слой плюс version strings.
+Добавлен regression fixture на выбранный post-dialog с чужой ссылкой внутри.
+Старые тесты parent_id/body/version/reply-dialog сохранены и обновлены на 0.5.6.
+
+ВАЖНО: в этом чате тестовый раннер локально не запускался. Нельзя считать PASS
+только по наличию тестов. Нужен живой пользовательский прогон 50 постов backpackIL.
