@@ -112,6 +112,19 @@ async function exportSaved(expected){
  j=await call('status');assert.equal(j.stage,'stalled');assert.equal(j.paused,true);assert.equal(j.discovered,0);assert.match(j.note,/Контрольная точка/);
  // Manual reset exists only as a recovery path; normal packages keep the checkpoint automatically.
  j=await call('resetCheckpoint',{group:'backpackIL'});assert.equal(j.stage,'discover');assert.equal(j.paused,false);assert.equal(j.checkpointPostId,null);assert.equal(storage['burCollectorCheckpoints-v05'].backpackIL,undefined);
+ // Fresh-install recovery: an explicit post_id from the popup overrides missing/stale storage,
+ // is persisted, the boundary itself is skipped, and only following posts enter the new package.
+ await call('pause');
+ const manualId=makePost(777).post_id;
+ j=await call('start',{tabId:5,url:tab.url,replacePaused:true,startAfter:manualId,options:{maxPosts:100}});
+ assert.equal(j.checkpointPostId,manualId);assert.equal(j.checkpointPending,true);assert.equal(j.checkpointSource,'manual');
+ assert.equal(storage['burCollectorCheckpoints-v05'].backpackIL.post_id,manualId);
+ cp=await call('discover',{posts:[makePost(776),makePost(777),makePost(778),makePost(779)],step:1});
+ j=await call('status');assert.equal(cp.seekingCheckpoint,false);assert.equal(j.checkpointFound,true);assert.equal(j.discovered,2);
+ assert.deepEqual((await call('exportSlice',{offset:0,limit:50})).items.map(p=>p.post_id).sort(),[makePost(778).post_id,makePost(779).post_id].sort());
+ await call('pause');await call('resetCheckpoint',{group:'backpackIL'});
+ j=await call('start',{tabId:5,url:tab.url,replacePaused:true,options:{maxPosts:100}});
+ assert.equal(j.checkpointPostId,null);assert.equal(j.checkpointPending,false);
  const fixture=process.env.BUR_53_FIXTURE?JSON.parse(fs.readFileSync(process.env.BUR_53_FIXTURE,'utf8')):{posts:Array.from({length:53},(_,i)=>makePost(i+100))};assert.equal(fixture.posts.length,53);
  await call('discover',{posts:fixture.posts,step:1});j=await call('status');assert.equal(j.stage,'discover');assert.equal(j.discovered,53);
  // One button does everything: finish scan, immediately navigate first post. No 'resume' click.
