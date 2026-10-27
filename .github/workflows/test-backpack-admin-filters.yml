@@ -14,3 +14,5 @@ jobs:
         with:
           node-version: '22'
       - run: node backpack-admin-pilot/facets.test.js
+
+      - run: node backpack-admin-pilot/catalog-adapter.test.js
