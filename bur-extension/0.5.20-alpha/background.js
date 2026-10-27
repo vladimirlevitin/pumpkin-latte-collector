@@ -1,8 +1,8 @@
-/* FB Bur 0.5.20-alpha. Continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
+/* FB Bur 0.5.21-alpha. Continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
 importScripts('core.js');
 const C=globalThis.FBBurCore;
 const DB='bur-collector-v05', DBVER=1,JOB_KEY='burCollectorJob-v0520',CHECKPOINT_KEY='burCollectorCheckpoints-v0520',HISTORY_KEY='burCollectorHistory-v0520',ALARM='bur-collector-watchdog';
-const VERSION='0.5.20-alpha',CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
+const VERSION='0.5.21-alpha',CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
 const historyCache=new Map();
 const DEFAULTS={maxPosts:50,maxSteps:15000};
 function groupOf(url){try{const u=new URL(url);if(!['www.facebook.com','web.facebook.com'].includes(u.hostname))return null;return decodeURIComponent(u.pathname.match(/^\/groups\/([^/]+)/)?.[1]||'')||null;}catch{return null;}}
@@ -303,7 +303,7 @@ async function discovered(msg,sender){
   if(!cp){
    rememberCheckpointSeen(j,observations.filter(o=>Number.isFinite(o.top)&&o.top<vh).map(o=>o.post.post_id));
    j.note='Аварийное восстановление: ищу checkpoint '+j.checkpointPostId+'; проходы '+j.checkpointScanSteps+'. До него ничего не сохранено.';
-   if(j.steps>=j.options.maxSteps||msg.exhausted)return stall(j,'Checkpoint '+j.checkpointPostId+' не найден после полного лимита проходов',msg.diagnostics,'discover');
+   if(msg.exhausted)return stall(j,'Facebook не продвигает ленту; checkpoint '+j.checkpointPostId+' не найден, ничего не сохранялось',msg.diagnostics,'discover');
    await setJob(j);return {added:0,updated:0,stage:j.stage,discovered:j.discovered,seekingCheckpoint:true,checkpoint:j.checkpointPostId,seenBeforeCheckpoint:j.checkpointSeenIds.length};
   }
   const top=cp.top;rememberCheckpointSeen(j,observations.filter(o=>Number.isFinite(o.top)&&o.top<=top+4).map(o=>o.post.post_id));rememberCheckpointSeen(j,[j.checkpointPostId]);
