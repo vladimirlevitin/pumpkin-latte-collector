@@ -1,0 +1,24 @@
+FB Bur 0.5.18-alpha QA target
+
+Live failure being prevented:
+- accepted 0.5.17 checkpoint: 1752369412541760;
+- next automatic run reported 50/50, 0 errors;
+- external comparison found only 3 new post_ids and 47 duplicates from older data;
+- seen_before_checkpoint_count=1 proved the collector did not truly traverse from feed top.
+
+Required automated assertions:
+- checkpoint start reloads the Facebook group;
+- stale restored DOM near checkpoint cannot save anything before rewind confirmation;
+- rewindToTop resets feed ancestor, main/document surfaces and requires 3 stable top checks;
+- failed rewind stalls safely with zero stored posts;
+- after confirmed top, seek remains geometry-based;
+- pre-checkpoint ids are persisted to history;
+- old cards re-rendered after the boundary cannot enter the new package;
+- new package has zero overlap with prior synthetic package;
+- discoveryOrder drives deep queue and next checkpoint;
+- checkpoint/history survive extension storage loss through facebook.com localStorage;
+- legacy 0.5.17 checkpoint namespace is ignored.
+
+Live Facebook remains NOT TESTED for 0.5.18 until backpackIL is seeded manually
+with accepted boundary 1752369412541760 and the resulting package passes external
+post_id comparison against all accepted earlier packages.
