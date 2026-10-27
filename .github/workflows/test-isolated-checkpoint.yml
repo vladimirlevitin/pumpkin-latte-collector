@@ -1,0 +1,20 @@
+name: Isolated checkpoint search tests
+on:
+  push:
+    branches: [feature/bur-checkpoint-search-isolated]
+    paths:
+      - 'checkpoint-search-lab/**'
+      - '.github/workflows/test-isolated-checkpoint.yml'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node checkpoint-search-lab/test-checkpoint-search.js
+      - name: Ensure collector files untouched
+        run: |
+          git fetch origin bur/canonical-0.5.20-alpha
+          test -z "$(git diff --name-only FETCH_HEAD HEAD -- bur-extension/0.5.20-alpha)"
