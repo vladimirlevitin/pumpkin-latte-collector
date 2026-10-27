@@ -1,10 +1,10 @@
-/* FB Bur collector-only 0.5.18-alpha. Verified feed rewind + geometry continuation + seen-id history. */
+/* FB Bur 0.5.19-alpha. Continuous feed session: feed tab stays put; deep runs in a service tab. */
 importScripts('core.js');
 const C=globalThis.FBBurCore;
-const DB='bur-collector-v05', DBVER=1,JOB_KEY='burCollectorJob-v05',CHECKPOINT_KEY='burCollectorCheckpoints-v0518',HISTORY_KEY='burCollectorHistory-v0518',ALARM='bur-collector-watchdog';
-const VERSION='0.5.18-alpha',CHECKPOINT_ALGORITHM='feed_rewind_geometry_v2',HISTORY_LIMIT=50000,now=()=>Date.now();
+const DB='bur-collector-v05', DBVER=1,JOB_KEY='burCollectorJob-v0519',CHECKPOINT_KEY='burCollectorCheckpoints-v0519',HISTORY_KEY='burCollectorHistory-v0519',ALARM='bur-collector-watchdog';
+const VERSION='0.5.19-alpha',CHECKPOINT_ALGORITHM='continuous_feed_v3',HISTORY_LIMIT=50000,now=()=>Date.now();
 const historyCache=new Map();
-const DEFAULTS={maxPosts:100,maxSteps:900};
+const DEFAULTS={maxPosts:50,maxSteps:15000};
 function groupOf(url){try{const u=new URL(url);if(!['www.facebook.com','web.facebook.com'].includes(u.hostname))return null;return decodeURIComponent(u.pathname.match(/^\/groups\/([^/]+)/)?.[1]||'')||null;}catch{return null;}}
 function postIdOf(url,group){return C.idFromPermalink(url,group);}
 function openDB(){return new Promise((resolve,reject)=>{const r=indexedDB.open(DB,DBVER);r.onupgradeneeded=()=>{const db=r.result;if(!db.objectStoreNames.contains('posts')){const s=db.createObjectStore('posts',{keyPath:'key'});s.createIndex('group','group');}};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});}
@@ -81,7 +81,7 @@ function rememberCheckpointSeen(j,ids){
 async function admitRows(j,rows){
  const blocked=new Set((Array.isArray(j.checkpointSeenIds)?j.checkpointSeenIds:[]).map(String));
  if(j.checkpointPostId)blocked.add(String(j.checkpointPostId));
- const historical=await historyFor(j.group,j.tabId);
+ const historical=await historyFor(j.group,j.feedTabId??j.tabId);
  const order=Array.isArray(j.discoveryOrder)?j.discoveryOrder.map(String):[],known=new Set(order),batchSeen=new Set();
  const eligible=[],newIds=[];let historyRejected=0,remaining=Math.max(0,(j.options?.maxPosts||0)-order.length);
  for(const raw of rows||[]){
@@ -115,6 +115,10 @@ async function ensureContent(tabId,group){
  if(!r?.ready||r.version!==VERSION)throw Error('Не удалось подтвердить версию скрипта '+VERSION);
  return r;
 }
+function isRootFeedUrl(url,group){try{const u=new URL(url);return groupOf(url)===group&&u.pathname.replace(/\/+$/,'')==='/groups/'+group;}catch{return false;}}
+function feedId(j){return j?.feedTabId??j?.tabId??null;}
+function deepId(j){return j?.deepTabId??null;}
+function senderRole(j,sender){const id=sender?.tab?.id;if(!j||!id)return null;if(id===feedId(j)&&groupOf(sender.tab?.url)===j.group)return 'feed';if(id===deepId(j)&&groupOf(sender.tab?.url)===j.group)return 'deep';return null;}
 async function start({tabId,url,options={},replacePaused=false,startAfter=null}){const group=groupOf(url);if(!group||!/^\/groups\/[^/]+\/?$/.test(new URL(url).pathname))throw Error('Откройте ленту нужной Facebook-группы');await ensureContent(tabId,group);const existing=await getJob();if(existing&&existing.stage!=='done'&&!(replacePaused&&existing.paused))throw Error('Сбор уже существует: нажмите «Продолжить» либо поставьте его на паузу перед запуском другой группы.');
  const opts={maxPosts:Math.max(5,Math.min(5000,Math.trunc(Number(options.maxPosts)||DEFAULTS.maxPosts))),maxSteps:Math.max(30,Math.min(15000,Math.trunc(Number(options.maxSteps)||DEFAULTS.maxSteps)))};
  const manual=String(startAfter||'').trim();if(manual&&!/^\d{8,30}$/.test(manual))throw Error('post_id должен состоять только из цифр');
