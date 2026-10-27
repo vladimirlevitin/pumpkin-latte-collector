@@ -1,0 +1,38 @@
+name: Bur checkpoint-only integration tests
+on:
+  push:
+    branches: [feature/bur-0521-adaptive-seek-integrated]
+    paths:
+      - 'bur-extension/0.5.20-alpha/**'
+      - '.github/workflows/test-bur-0521-seek.yml'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install playwright
+      - run: python -m playwright install chromium
+      - name: Validate script compatibility and seek invariants
+        run: |
+          python - <<'PY'
+          import pathlib,re,json
+          root=pathlib.Path('bur-extension/0.5.20-alpha')
+          src=(root/'content.js').read_text()
+          bg=(root/'background.js').read_text()
+          manifest=json.loads((root/'manifest.json').read_text())
+          assert manifest['version_name']=='0.5.21-alpha'
+          assert "version:'0.5.21-alpha'" in src
+          assert "const VERSION='0.5.21-alpha'" in bg
+          seek=src[src.index('async function seekCheckpoint'):src.index('async function discover(job)')]
+          assert "await send('discover'" in seek and "if(!r||r.stage!=='discover'||!r.seekingCheckpoint)return" in seek
+          assert "await F.advance" in seek
+          assert "C.expandVisible" not in seek
+          assert "if(msg.exhausted)return stall" in bg
+          assert "if(j.steps>=j.options.maxSteps||msg.exhausted)" not in bg
+          print('PASS seek checks')
+          PY
+      - name: Test full existing collector
+        run: cd bur-extension/0.5.20-alpha && python run-tests.py
