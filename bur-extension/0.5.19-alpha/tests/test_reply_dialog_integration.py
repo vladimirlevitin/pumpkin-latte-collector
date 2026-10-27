@@ -29,7 +29,7 @@ document.getElementById('replies').onclick=function(){{ this.remove();
 </body></html>'''
 with sync_playwright() as p:
  b=p.chromium.launch(headless=True,args=['--no-sandbox']);page=b.new_page(viewport={'width':1200,'height':800});page.set_content(html)
- job={'id':'reply-dialog','stage':'deep','group':'backpackIL','paused':False,'queue':[ID],'index':0,'navStartedAt':0}
+ job={'id':'reply-dialog','stage':'deep','tabRole':'deep','group':'backpackIL','paused':False,'queue':[ID],'index':0,'navStartedAt':0}
  page.evaluate('''(job)=>{window.testJob=job;window.snapshots=[];window.obstructions=[];window.errors=[];
  window.chrome={runtime:{sendMessage:async(msg)=>{
   if(msg.type==='status')return {ok:true,result:window.testJob};
