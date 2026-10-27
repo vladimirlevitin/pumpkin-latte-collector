@@ -1,4 +1,4 @@
-/* FB Bur 0.5.17-alpha: feed-order observations + structured comment threads. */
+/* FB Bur 0.5.18-alpha: feed-order observations + structured comment threads. */
 (() => {
 'use strict';
 if(window.__burCollector052)return;window.__burCollector052=true;
@@ -73,6 +73,12 @@ async function handleObstruction(job,phase){
 async function discover(job){
  if(!isFeed())return;
  if(await handleObstruction(job,'разведка'))return;
+ if(job.rewindPending){
+  const result=await F.rewindToTop(document,window,delay);
+  await send('rewindResult',{result});
+  noNew=0;noMove=0;
+  return;
+ }
  const group=job.group;
  // Bounded, user-visible interactions; no hidden endpoints or request interception.
  const nodes=C.postNodes(document);C.expandVisible(nodes,12,'post');await delay(450);
@@ -159,9 +165,11 @@ async function tick(){if(busy)return;busy=true;try{
  if(j.stage==='discover')await discover(j);else await deep(j);
  }catch(e){console.warn('FB Бур (задание сохранено):',String(e.message||e).slice(0,200));}finally{busy=false;}}
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='burPing'){reply({ready:true,version:'0.5.17-alpha',location:location.pathname,obstruction:F.obstruction(document,window),detailPost:Boolean(F.detailDialog(document,window))});return;}
- if(msg?.type==='burCheckpointGet'){const group=groupFromURL();if(!group||msg.group!==group){reply({post_id:null});return;}reply({post_id:localStorage.getItem('fb-bur-checkpoint-v2:'+group)||null});return;}
- if(msg?.type==='burCheckpointSet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ok:false});return;}const key='fb-bur-checkpoint-v2:'+group;if(msg.post_id)localStorage.setItem(key,String(msg.post_id));else localStorage.removeItem(key);reply({ok:true});return;}
+ if(msg?.type==='burPing'){reply({ready:true,version:'0.5.18-alpha',location:location.pathname,obstruction:F.obstruction(document,window),detailPost:Boolean(F.detailDialog(document,window))});return;}
+ if(msg?.type==='burCheckpointGet'){const group=groupFromURL();if(!group||msg.group!==group){reply({post_id:null});return;}reply({post_id:localStorage.getItem('fb-bur-checkpoint-v3:'+group)||null});return;}
+ if(msg?.type==='burCheckpointSet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ok:false});return;}const key='fb-bur-checkpoint-v3:'+group;if(msg.post_id)localStorage.setItem(key,String(msg.post_id));else localStorage.removeItem(key);reply({ok:true});return;}
+ if(msg?.type==='burHistoryGet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ids:[]});return;}try{const raw=JSON.parse(localStorage.getItem('fb-bur-history-v1:'+group)||'[]');reply({ids:Array.isArray(raw)?raw.filter(x=>/^\\d{8,30}$/.test(String(x))).slice(-50000):[]});}catch{reply({ids:[]});}return;}
+ if(msg?.type==='burHistorySet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ok:false});return;}try{const ids=Array.isArray(msg.ids)?msg.ids.map(String).filter(x=>/^\\d{8,30}$/.test(x)).slice(-50000):[];localStorage.setItem('fb-bur-history-v1:'+group,JSON.stringify(ids));reply({ok:true,count:ids.length});}catch{reply({ok:false});}return;}
  if(msg?.type==='burWake')setTimeout(tick,300);
 });
 setTimeout(tick,900);setInterval(tick,2600);
