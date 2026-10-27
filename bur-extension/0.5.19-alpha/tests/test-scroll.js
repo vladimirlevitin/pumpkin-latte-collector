@@ -17,7 +17,7 @@ function elem(role,overflowY,scrollHeight,clientHeight,parent){const obj={role,o
  view.scrollY=docRoot.scrollHeight-docRoot.clientHeight;docRoot.scrollTop=view.scrollY;
  const third=await F.advance(doc,view,async()=>{});
  assert.equal(third.moved,false);assert.ok(third.tries.every(x=>x.moved===false));
- // 0.5.18: stale/restored scroll positions must be forced to a verified top.
+ // 0.5.19: stale/restored scroll positions must be forced to a verified top.
  scroll.scrollTop=1700;main.scrollTop=900;docRoot.scrollTop=1200;view.scrollY=1200;
  const rewind=await F.rewindToTop(doc,view,async()=>{});
  assert.equal(rewind.ok,true);assert.ok(rewind.stable_rounds>=3);assert.equal(rewind.position,0);
