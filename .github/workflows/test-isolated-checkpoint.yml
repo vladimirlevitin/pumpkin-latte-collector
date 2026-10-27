@@ -14,6 +14,7 @@ jobs:
         with:
           node-version: '22'
       - run: node checkpoint-search-lab/test-checkpoint-search.js
+      - run: node checkpoint-search-lab/test-dynamic-feed.js
       - name: Ensure collector files untouched
         run: |
           git fetch origin bur/canonical-0.5.20-alpha
