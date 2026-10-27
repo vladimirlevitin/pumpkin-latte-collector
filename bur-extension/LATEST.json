@@ -1,11 +1,11 @@
 {
   "product": "FB Бур Chrome extension",
-  "version": "0.5.17-alpha",
-  "branch": "bur/canonical-0.5.17-alpha",
-  "source": "bur-extension/0.5.17-alpha",
-  "source_commit": "50777f3daf715ff0eb09508839534e73a8c75db1",
-  "zip": "releases/bur-collector-0.5.17-alpha-FULL.zip",
-  "sha256": "8a67f274a44aad11aba8dd4e31f5a86791d5b892e94823e9baa41b9388ece7fd",
+  "version": "0.5.18-alpha",
+  "branch": "bur/canonical-0.5.18-alpha",
+  "source": "bur-extension/0.5.18-alpha",
+  "source_commit": "4d8752da744359340c947350da508a73bd3b92e4",
+  "zip": "releases/bur-collector-0.5.18-alpha-FULL.zip",
+  "sha256": "8040b0203beeea76ac19b46241f995885102654424ccb5b82a591598ce4e48b3",
   "tests": "run-tests.py PASS in GitHub Actions",
-  "live_facebook": "NOT TESTED; first backpackIL run must seed post_id 1760011101777591 and verify zero overlap against prior accepted batch"
+  "live_facebook": "NOT TESTED; first backpackIL run must manually seed accepted boundary 1752369412541760 and verify zero overlap with all accepted earlier packages"
 }
