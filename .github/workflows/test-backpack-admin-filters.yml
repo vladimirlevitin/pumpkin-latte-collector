@@ -16,3 +16,4 @@ jobs:
       - run: node backpack-admin-pilot/facets.test.js
 
       - run: node backpack-admin-pilot/catalog-adapter.test.js
+      - run: node backpack-admin-pilot/stage-edge-patch.test.js
