@@ -1,9 +1,11 @@
-FB Bur 0.5.17-alpha
+FB Bur 0.5.18-alpha
 
-- Fixed live 0.5.16 continuation failure that duplicated the previous batch (50/50 overlap).
-- Checkpoint seeking now saves NOTHING before the boundary.
-- "After checkpoint" is determined by vertical feed geometry, never DOM array order.
-- Discovery order is explicit and drives the deep queue and next checkpoint.
-- Old 0.5.16 checkpoint storage is intentionally ignored; 0.5.17 uses a new trusted namespace.
-- Export includes discovery_order and checkpoint diagnostics for external batch acceptance.
-- Regression covers scrambled DOM order, prefetched checkpoint below viewport, stale old DOM nodes, zero overlap, and reinstall recovery.
+- Fixed live 0.5.17 restored-scroll failure: automatic checkpoint run produced 47/50 already-known post_ids.
+- Continuation now reloads the group and verifies a true top-of-feed rewind before checkpoint seeking.
+- Rewind requires three stable top checks; no posts can be stored while rewindPending.
+- Added persistent per-group seen-id history in chrome.storage + facebook.com localStorage.
+- IDs observed before checkpoint are persisted; known historical ids are rejected after the boundary.
+- 0.5.17 checkpoint namespace is intentionally ignored.
+- Export includes rewind/history diagnostics.
+- Reset checkpoint also clears seen-id history for an intentional fresh start.
+- Regression reproduces restored-near-checkpoint start, scrambled DOM, upward re-render after boundary, and zero-overlap outcome.
