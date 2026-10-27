@@ -1,11 +1,11 @@
-FB Bur 0.5.18-alpha
+FB Bur 0.5.20-alpha
 
-- Fixed live 0.5.17 restored-scroll failure: automatic checkpoint run produced 47/50 already-known post_ids.
-- Continuation now reloads the group and verifies a true top-of-feed rewind before checkpoint seeking.
-- Rewind requires three stable top checks; no posts can be stored while rewindPending.
-- Added persistent per-group seen-id history in chrome.storage + facebook.com localStorage.
-- IDs observed before checkpoint are persisted; known historical ids are rejected after the boundary.
-- 0.5.17 checkpoint namespace is intentionally ignored.
-- Export includes rewind/history diagnostics.
-- Reset checkpoint also clears seen-id history for an intentional fresh start.
-- Regression reproduces restored-near-checkpoint start, scrambled DOM, upward re-render after boundary, and zero-overlap outcome.
+Fix: continuous feed continuation after automatic JSON export no longer requires the previous batch boundary card to remain in Facebook's virtualized DOM.
+
+- Feed content script exposes a per-document pageInstance and scrollY.
+- Before deep extraction, background stores the live feed document identity and scroll anchor.
+- After export, the next batch continues immediately when the same feed document and position are still alive.
+- Checkpoint recovery is allowed only after a real feed loss/reload or missing root feed.
+- Feed stalls, max-step exhaustion, and repeated obstructions pause safely when the live document is still intact instead of rewinding to the root.
+- Regression covers b0001 -> b0002 -> b0003 with the boundary card absent from the DOM.
+- Recovery regression verifies that replacing the feed document still triggers checkpoint recovery.
