@@ -1,0 +1,67 @@
+name: Test and package Bur 0.5.21
+on:
+  push:
+    branches: [release/bur-0521-search-only]
+    paths:
+      - 'bur-extension/0.5.20-alpha/**'
+      - '.github/workflows/build-bur-0521.yml'
+permissions:
+  contents: write
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test browser
+        run: |
+          python -m pip install --disable-pip-version-check playwright
+          python -m playwright install chromium
+      - name: Check checkpoint-only changes and syntax
+        run: |
+          cd bur-extension/0.5.20-alpha
+          node --check background.js
+          node --check content.js
+          node --check feed-scroll.js
+          python - <<'PY'
+          import pathlib,json
+          p=pathlib.Path('.')
+          bg=(p/'background.js').read_text()
+          content=(p/'content.js').read_text()
+          manifest=json.loads((p/'manifest.json').read_text())
+          assert manifest['version']=='0.5.21'
+          assert "if(msg.exhausted)return stall(j,'Facebook" in bg
+          assert "if(msg.exhausted)return stall(j" in bg
+          assert "version:'0.5.21-alpha'" in content
+          assert 'if(!job.checkpointPending){const nodes=' in content
+          assert 'job.checkpointPending?450:1400' in content
+          assert 'checkpointBypassPending' not in bg
+          print('PASS checkpoint source invariants')
+          PY
+      - name: Full regression suite
+        run: cd bur-extension/0.5.20-alpha && python run-tests.py
+      - name: Package full extension
+        run: |
+          python - <<'PY'
+          import pathlib,zipfile
+          src=pathlib.Path('bur-extension/0.5.20-alpha')
+          dst=pathlib.Path('releases/bur-collector-0.5.21-search-only-FULL.zip')
+          dst.parent.mkdir(exist_ok=True)
+          with zipfile.ZipFile(dst,'w',zipfile.ZIP_DEFLATED) as z:
+            for p in sorted(src.rglob('*')):
+              if p.is_file():z.write(p,p.relative_to(src))
+          print(dst, dst.stat().st_size)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bur-0521
+          path: releases/bur-collector-0.5.21-search-only-FULL.zip
+      - name: Commit tested package
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add releases/bur-collector-0.5.21-search-only-FULL.zip
+          git commit -m 'Release tested Bur 0.5.21-alpha' || exit 0
+          git push origin HEAD:release/bur-0521-search-only
