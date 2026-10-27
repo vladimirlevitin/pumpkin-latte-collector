@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import time
+import traceback
 from pathlib import Path
 
 from import_bur_json import (
@@ -184,6 +185,18 @@ def backfill_trusted_legacy(
             print(f"FAIL backfill {path.name}: {exc}")
 
 
+def append_crash_log(message: str) -> None:
+    try:
+        base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / ".fb-bur")) / "FB-Bur"
+        base.mkdir(parents=True, exist_ok=True)
+        log = base / "watcher-crash.log"
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write("\n[" + time.strftime("%Y-%m-%dT%H:%M:%S") + "]\n")
+            fh.write(message.rstrip() + "\n")
+    except Exception:
+        pass
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("folder", nargs="?", default=str(Path.home() / "Downloads"))
@@ -221,43 +234,51 @@ def main() -> int:
 
     try:
         while True:
-            for path in scan_candidates(folder):
-                key = file_key(path)
-                if key in imported:
-                    continue
-
-                size = path.stat().st_size
-                prev = stable_sizes.get(str(path))
-                stable_sizes[str(path)] = size
-                if prev is None or prev != size:
-                    continue
-
-                eligible, reason = is_auto_eligible(path)
-                if not eligible:
-                    # Legacy files are handled only by the exact-hash backfill above.
-                    if reason.startswith("legacy collector"):
+            try:
+                for path in scan_candidates(folder):
+                    key = file_key(path)
+                    if key in imported:
                         continue
-                    print(f"SKIP {path.name}: {reason}")
-                    imported[key] = {"status": "skipped", "reason": reason}
-                    save_state(state_file, state)
-                    continue
 
-                try:
-                    result = import_file(path, base_url, secret)
-                    entry: dict = {}
-                    record_result(entry, result)
-                    imported[key] = entry
-                    save_state(state_file, state)
-                    print(
-                        f"OK   {path.name}: group={result.get('group')} "
-                        f"posts={result.get('posts_seen')} new={result.get('posts_new')} "
-                        f"comments={result.get('comments_seen')} "
-                        f"last={result.get('last_collected_post_id')} "
-                        f"storage={result.get('storage_status')}:{result.get('storage_path')} "
-                        f"reused={bool(result.get('reused'))}"
-                    )
-                except Exception as exc:
-                    print(f"FAIL {path.name}: {exc}")
+                    size = path.stat().st_size
+                    prev = stable_sizes.get(str(path))
+                    stable_sizes[str(path)] = size
+                    if prev is None or prev != size:
+                        continue
+
+                    eligible, reason = is_auto_eligible(path)
+                    if not eligible:
+                        # Legacy files are handled only by the exact-hash backfill above.
+                        if reason.startswith("legacy collector"):
+                            continue
+                        print(f"SKIP {path.name}: {reason}")
+                        imported[key] = {"status": "skipped", "reason": reason}
+                        save_state(state_file, state)
+                        continue
+
+                    try:
+                        result = import_file(path, base_url, secret)
+                        entry: dict = {}
+                        record_result(entry, result)
+                        imported[key] = entry
+                        save_state(state_file, state)
+                        print(
+                            f"OK   {path.name}: group={result.get('group')} "
+                            f"posts={result.get('posts_seen')} new={result.get('posts_new')} "
+                            f"comments={result.get('comments_seen')} "
+                            f"last={result.get('last_collected_post_id')} "
+                            f"storage={result.get('storage_status')}:{result.get('storage_path')} "
+                            f"reused={bool(result.get('reused'))}"
+                        )
+                    except Exception as exc:
+                        print(f"FAIL {path.name}: {exc}")
+            except Exception:
+                detail = traceback.format_exc()
+                print("WATCHER ERROR: scan loop failed; continuing.")
+                print(detail)
+                append_crash_log(detail)
+                if args.once:
+                    return 1
 
             if args.once:
                 return 0
