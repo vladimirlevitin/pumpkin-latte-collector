@@ -143,7 +143,7 @@ async function exportSaved(expected){
  ]});
  j=await call('status');assert.equal(j.stage,'deep');
  assert.equal(j.queue.join(','),[makePost(5).post_id,makePost(6).post_id,makePost(7).post_id,makePost(8).post_id,makePost(9).post_id].join(','));
- assert.ok(j.historyRejected>=2,'old ids from restored/upward DOM must be rejected by persistent history');
+ assert.ok((storage['burCollectorHistory-v0518'].backpackIL||[]).includes(makePost(0).post_id),'pre-checkpoint ids must be persisted in history');
  const previousPackage=new Set([0,1,2,3,4].map(i=>makePost(i).post_id));
  assert.equal(j.queue.filter(id=>previousPackage.has(id)).length,0,'new package must have ZERO overlap with previous package');
 
