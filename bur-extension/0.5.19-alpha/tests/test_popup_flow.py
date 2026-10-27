@@ -9,7 +9,7 @@ with sync_playwright() as p:
  page.evaluate('''() => {
  window.calls=[];window.job=null;window.activeUrl='https://www.facebook.com/groups/backpackIL/';window.lastStart=null;
  const result=(value)=>({ok:true,result:value});
- window.chrome={runtime:{getManifest:()=>({version_name:'0.5.18-alpha'}),sendMessage:async(msg)=>{
+ window.chrome={runtime:{getManifest:()=>({version_name:'0.5.19-alpha'}),sendMessage:async(msg)=>{
  window.calls.push(msg.type);
  if(msg.type==='status')return result(window.job);
  if(msg.type==='start'){window.lastStart=msg;const g=new URL(msg.url).pathname.split('/')[2];window.job={group:g,tabId:5,stage:'discover',discovered:0,deepDone:0,deepErrors:0,queue:[],steps:0,options:{maxPosts:20},paused:false};return result(window.job);}
