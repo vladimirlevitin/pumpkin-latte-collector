@@ -1,0 +1,20 @@
+FB Bur 0.5.17-alpha QA target
+
+Live bug being prevented:
+- 0.5.16 reported 50/50, 0 errors, but its output overlapped the previous package 50/50.
+- Root cause: DOM array position and first_seen were treated as feed order.
+
+Required automated assertions:
+- no data persisted while checkpoint is still below/not reached;
+- checkpoint itself never enters the new package;
+- input observation array may be scrambled without changing feed-order result;
+- posts physically above checkpoint are excluded;
+- posts physically below checkpoint are admitted in top-to-bottom order;
+- old cards retained in DOM remain excluded after boundary;
+- discoveryOrder drives deep queue;
+- adjacent synthetic packages have zero post_id overlap;
+- lastCollectedPostId equals discoveryOrder[-1];
+- trusted checkpoint survives reinstall through facebook.com localStorage v2;
+- legacy 0.5.16 checkpoint namespace is ignored.
+
+Live Facebook remains NOT TESTED until the first 0.5.17 backpackIL run.

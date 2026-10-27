@@ -1,0 +1,9 @@
+FB Bur 0.5.17-alpha
+
+- Fixed live 0.5.16 continuation failure that duplicated the previous batch (50/50 overlap).
+- Checkpoint seeking now saves NOTHING before the boundary.
+- "After checkpoint" is determined by vertical feed geometry, never DOM array order.
+- Discovery order is explicit and drives the deep queue and next checkpoint.
+- Old 0.5.16 checkpoint storage is intentionally ignored; 0.5.17 uses a new trusted namespace.
+- Export includes discovery_order and checkpoint diagnostics for external batch acceptance.
+- Regression covers scrambled DOM order, prefetched checkpoint below viewport, stale old DOM nodes, zero overlap, and reinstall recovery.
