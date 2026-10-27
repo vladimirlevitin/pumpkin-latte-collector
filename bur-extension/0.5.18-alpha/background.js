@@ -1,8 +1,9 @@
-/* FB Bur collector-only 0.5.17-alpha. Feed-order continuation checkpoints; never trust DOM array order. */
+/* FB Bur collector-only 0.5.18-alpha. Verified feed rewind + geometry continuation + seen-id history. */
 importScripts('core.js');
 const C=globalThis.FBBurCore;
-const DB='bur-collector-v05', DBVER=1,JOB_KEY='burCollectorJob-v05',CHECKPOINT_KEY='burCollectorCheckpoints-v0517',ALARM='bur-collector-watchdog';
-const VERSION='0.5.17-alpha',CHECKPOINT_ALGORITHM='feed_geometry_v1',now=()=>Date.now();
+const DB='bur-collector-v05', DBVER=1,JOB_KEY='burCollectorJob-v05',CHECKPOINT_KEY='burCollectorCheckpoints-v0518',HISTORY_KEY='burCollectorHistory-v0518',ALARM='bur-collector-watchdog';
+const VERSION='0.5.18-alpha',CHECKPOINT_ALGORITHM='feed_rewind_geometry_v2',HISTORY_LIMIT=50000,now=()=>Date.now();
+const historyCache=new Map();
 const DEFAULTS={maxPosts:100,maxSteps:900};
 function groupOf(url){try{const u=new URL(url);if(!['www.facebook.com','web.facebook.com'].includes(u.hostname))return null;return decodeURIComponent(u.pathname.match(/^\/groups\/([^/]+)/)?.[1]||'')||null;}catch{return null;}}
 function postIdOf(url,group){return C.idFromPermalink(url,group);}
@@ -21,9 +22,33 @@ async function setCheckpoint(group,postId,meta={}){
 }
 async function getPageCheckpoint(tabId,group){try{const r=await chrome.tabs.sendMessage(tabId,{type:'burCheckpointGet',group});const id=String(r?.post_id||'').trim();return /^\d{8,30}$/.test(id)?id:null;}catch{return null;}}
 async function setPageCheckpoint(tabId,group,postId){try{await chrome.tabs.sendMessage(tabId,{type:'burCheckpointSet',group,post_id:postId?String(postId):null});return true;}catch{return false;}}
+async function getPageHistory(tabId,group){try{const r=await chrome.tabs.sendMessage(tabId,{type:'burHistoryGet',group});return Array.isArray(r?.ids)?r.ids.map(String).filter(x=>/^\d{8,30}$/.test(x)).slice(-HISTORY_LIMIT):[];}catch{return [];}}
+async function setPageHistory(tabId,group,ids){try{const list=Array.from(new Set((ids||[]).map(String).filter(x=>/^\d{8,30}$/.test(x)))).slice(-HISTORY_LIMIT);await chrome.tabs.sendMessage(tabId,{type:'burHistorySet',group,ids:list});return true;}catch{return false;}}
+async function historyFor(group,tabId=null){
+ if(historyCache.has(group))return historyCache.get(group);
+ const raw=(await chrome.storage.local.get(HISTORY_KEY))[HISTORY_KEY]||{},local=Array.isArray(raw[group])?raw[group]:[];
+ const page=tabId?await getPageHistory(tabId,group):[],set=new Set([...local,...page].map(String).filter(x=>/^\d{8,30}$/.test(x)));
+ while(set.size>HISTORY_LIMIT)set.delete(set.values().next().value);
+ historyCache.set(group,set);
+ raw[group]=[...set];await chrome.storage.local.set({[HISTORY_KEY]:raw});
+ if(tabId)await setPageHistory(tabId,group,raw[group]);
+ return set;
+}
+async function mergeHistory(group,ids,tabId=null){
+ const set=await historyFor(group,tabId);
+ for(const raw of ids||[]){const id=String(raw||'');if(/^\d{8,30}$/.test(id)){if(set.has(id))set.delete(id);set.add(id);}}
+ while(set.size>HISTORY_LIMIT)set.delete(set.values().next().value);
+ const all=(await chrome.storage.local.get(HISTORY_KEY))[HISTORY_KEY]||{};all[group]=[...set];await chrome.storage.local.set({[HISTORY_KEY]:all});
+ if(tabId)await setPageHistory(tabId,group,all[group]);
+ return set;
+}
+async function clearHistory(group,tabId=null){
+ historyCache.delete(group);const all=(await chrome.storage.local.get(HISTORY_KEY))[HISTORY_KEY]||{};delete all[group];await chrome.storage.local.set({[HISTORY_KEY]:all});
+ if(tabId)await setPageHistory(tabId,group,[]);return true;
+}
 async function checkpointForStart(group,existing,tabId){
- // 0.5.16 could persist a wrong boundary because it trusted DOM array order.
- // 0.5.17 uses a NEW trusted checkpoint namespace and never migrates a legacy queue.
+ // 0.5.17 could start from Facebook's restored scroll position and therefore
+ // record a false continuation. 0.5.18 never migrates its checkpoint namespace.
  const all=await getCheckpoints();if(all[group]?.post_id&&all[group]?.algorithm===CHECKPOINT_ALGORITHM)return all[group];
  const pageId=await getPageCheckpoint(tabId,group);
  if(pageId)return setCheckpoint(group,pageId,{source:'facebook_localstorage',recovered_after_reinstall:true,algorithm:CHECKPOINT_ALGORITHM});
@@ -50,23 +75,25 @@ function rememberCheckpointSeen(j,ids){
  for(const raw of ids||[]){const id=String(raw||'');if(!id||seen.has(id))continue;seen.add(id);arr.push(id);}
  // Old cards far above the checkpoint cannot re-enter a virtualized Facebook viewport.
  // Keep a generous rolling guard without letting one very deep scan bloat chrome.storage forever.
- if(arr.length>8000)arr.splice(0,arr.length-8000);
+ if(arr.length>HISTORY_LIMIT)arr.splice(0,arr.length-HISTORY_LIMIT);
  j.checkpointSeenIds=arr;
 }
 async function admitRows(j,rows){
  const blocked=new Set((Array.isArray(j.checkpointSeenIds)?j.checkpointSeenIds:[]).map(String));
  if(j.checkpointPostId)blocked.add(String(j.checkpointPostId));
+ const historical=await historyFor(j.group,j.tabId);
  const order=Array.isArray(j.discoveryOrder)?j.discoveryOrder.map(String):[],known=new Set(order),batchSeen=new Set();
- const eligible=[],newIds=[];let remaining=Math.max(0,(j.options?.maxPosts||0)-order.length);
+ const eligible=[],newIds=[];let historyRejected=0,remaining=Math.max(0,(j.options?.maxPosts||0)-order.length);
  for(const raw of rows||[]){
   const id=String(raw?.post_id||'');if(!id||blocked.has(id)||batchSeen.has(id))continue;batchSeen.add(id);
+  if(historical.has(id)&&!known.has(id)){historyRejected++;continue;}
   if(!known.has(id)){if(remaining<=0)continue;known.add(id);order.push(id);newIds.push(id);remaining--;}
   eligible.push(raw);
  }
  const allowed=new Set(order),toStore=eligible.filter(r=>allowed.has(String(r.post_id||'')));
  const db=toStore.length?await putMany(toStore,j.group):{added:0,updated:0};
- j.discoveryOrder=order;j.discovered=order.length;
- return {added:newIds.length,updated:db.updated||0,stored:toStore.length,newIds};
+ j.discoveryOrder=order;j.discovered=order.length;j.historyRejected=(j.historyRejected||0)+historyRejected;j.historyCount=historical.size;
+ return {added:newIds.length,updated:db.updated||0,stored:toStore.length,newIds,historyRejected};
 }
 async function notifyTab(tabId){try{await chrome.tabs.sendMessage(tabId,{type:'burWake'});}catch(e){console.warn('Bur wake',safeError(e));}}
 async function ensureContent(tabId,group){
@@ -93,11 +120,16 @@ async function start({tabId,url,options={},replacePaused=false,startAfter=null})
  const manual=String(startAfter||'').trim();if(manual&&!/^\d{8,30}$/.test(manual))throw Error('post_id должен состоять только из цифр');
  const checkpoint=manual?await setCheckpoint(group,manual,{manual:true,source:'popup',algorithm:CHECKPOINT_ALGORITHM}):await checkpointForStart(group,existing,tabId);
  if(manual)await setPageCheckpoint(tabId,group,manual);
+ const history=await historyFor(group,tabId);
  await clearGroup(group);
- const j={id:now().toString(36),version:VERSION,checkpointAlgorithm:CHECKPOINT_ALGORITHM,group,tabId,stage:'discover',paused:false,startedAt:now(),lastSeen:now(),steps:0,discovered:0,deepDone:0,deepErrors:0,queue:[],discoveryOrder:[],checkpointSeenIds:[],index:0,options:opts,
-  checkpointPostId:checkpoint?.post_id||null,checkpointPending:Boolean(checkpoint?.post_id),checkpointFound:false,checkpointScanSteps:0,checkpointSource:manual?'manual':(checkpoint?.recovered_after_reinstall?'facebook_localstorage':'stored'),
-  note:checkpoint?.post_id?'Ищу контрольную точку '+checkpoint.post_id+(manual?' (задана вручную)':'')+'. До неё только листаю, ничего не сохраняю.':'Разведка: первый пакет, сбор ВСЕХ доступных публикаций без оценки содержания'};
- await setJob(j);await notifyTab(tabId);return j;
+ const hasCheckpoint=Boolean(checkpoint?.post_id);
+ const j={id:now().toString(36),version:VERSION,checkpointAlgorithm:CHECKPOINT_ALGORITHM,group,tabId,stage:'discover',paused:false,startedAt:now(),lastSeen:now(),steps:0,discovered:0,deepDone:0,deepErrors:0,queue:[],discoveryOrder:[],checkpointSeenIds:[],historyRejected:0,historyCount:history.size,index:0,options:opts,
+  checkpointPostId:checkpoint?.post_id||null,checkpointPending:hasCheckpoint,checkpointFound:false,checkpointScanSteps:0,checkpointSource:manual?'manual':(checkpoint?.recovered_after_reinstall?'facebook_localstorage':'stored'),
+  rewindPending:hasCheckpoint,rewindVerified:!hasCheckpoint,rewindDiagnostics:null,
+  note:hasCheckpoint?'Сначала возвращаю Facebook-ленту в подтверждённый верх. До checkpoint '+checkpoint.post_id+' ничего не сохраняю.':'Разведка: первый пакет, сбор ВСЕХ доступных публикаций без оценки содержания'};
+ await setJob(j);
+ if(hasCheckpoint){await chrome.tabs.reload(tabId);return j;}
+ await notifyTab(tabId);return j;
 }
 async function pause(){const j=await getJob();if(!j)return null;j.paused=true;j.note='Остановлено пользователем';return setJob(j);}
 async function resume(tabId,url){const j=await getJob();if(!j)throw Error('Нет задания');if(j.stage==='done')throw Error('Задание завершено. Запустите новый сбор.');
@@ -132,8 +164,17 @@ async function obstructed(msg,sender){
  await chrome.tabs.update(j.tabId,{url:'https://www.facebook.com/groups/'+encodeURIComponent(j.group)+'/'});
  return {recovered:true};
 }
+async function rewindResult(msg,sender){
+ const j=await getJob();if(!j||j.stage!=='discover'||j.paused||sender.tab?.id!==j.tabId||groupOf(sender.tab?.url)!==j.group)return {ignored:true};
+ if(!j.rewindPending)return {ignored:true,alreadyDone:true};
+ const r=msg.result||{};j.lastSeen=now();j.rewindDiagnostics=r;
+ if(!r.ok){return stall(j,'Не удалось надёжно вернуть Facebook-ленту к самому верху; checkpoint не ищется и данные не сохраняются',{rewind:r},'discover');}
+ j.rewindPending=false;j.rewindVerified=true;j.rewindDoneAt=new Date().toISOString();j.steps=0;j.checkpointScanSteps=0;j.checkpointSeenIds=[];j.note='Верх ленты подтверждён. Ищу checkpoint '+j.checkpointPostId+'. До него ничего не сохраняю.';
+ await setJob(j);await notifyTab(j.tabId);return {ok:true,rewindVerified:true,checkpoint:j.checkpointPostId};
+}
 async function discovered(msg,sender){
  const j=await getJob();if(!j||j.stage!=='discover'||j.paused||sender.tab?.id!==j.tabId||groupOf(sender.tab?.url)!==j.group)return {ignored:true};
+ if(j.rewindPending)return {ignored:true,rewinding:true,stage:j.stage,discovered:j.discovered};
  const observations=observationsFrom(msg),vh=Math.max(1,Number(msg.viewportHeight)||observations[0]?.viewportHeight||800);
  j.steps+=Math.min(1,Number(msg.step)||0);j.lastSeen=now();
  let candidateRows=[];
@@ -158,6 +199,7 @@ async function discovered(msg,sender){
   rememberCheckpointSeen(j,observations.filter(o=>Number.isFinite(o.top)&&o.top<=cpTop+4).map(o=>o.post.post_id));
   rememberCheckpointSeen(j,[j.checkpointPostId]);
   j.checkpointPending=false;j.checkpointFound=true;j.checkpointFoundAt=new Date().toISOString();j.checkpointFoundTop=cpTop;
+  const historical=await mergeHistory(j.group,j.checkpointSeenIds,j.tabId);j.historyCount=historical.size;
   candidateRows=observations.filter(o=>Number.isFinite(o.top)&&Number.isFinite(o.bottom)&&o.top>cpTop+4&&o.bottom>0).map(o=>o.post);
  }else if(j.checkpointFound){
   // Once the boundary is crossed, ignore cards wholly above the viewport and every id
@@ -199,15 +241,16 @@ async function deepMismatch(msg,sender){
 async function completeDeep(msg,sender){const j=await getJob();if(!j||j.stage!=='deep'||j.paused||sender.tab?.id!==j.tabId)return {ignored:true};const id=j.queue[j.index];if(String(msg.post?.post_id||'')!==String(id)||postIdOf(sender.tab?.url,j.group)!==id)return {ignored:true};
  const row=C.normalizePost(msg.post,j.group);if(row.group!==j.group)throw Error('Чужая группа');await putMany([row],j.group);const merged=await getOne(row.key);merged.deep={status:'captured_unverified',at:new Date().toISOString(),visible_comment_count:merged.comments?.length||0,completeness:'unknown_not_all_threads_verified',scrolled:Number(msg.scrolled)||0,expanded:Number(msg.expanded)||0,fallback:msg.fallback||null};await putOne(merged);j.index++;j.deepDone++;j.lastSeen=now();await setJob(j);if(j.index>=j.queue.length)await finish(j);else await navigateCurrent(j);return {ok:true,index:j.index};}
 async function failDeep(msg,sender){const j=await getJob();if(!j||j.stage!=='deep'||j.paused||sender.tab?.id!==j.tabId)return {ignored:true};const id=j.queue[j.index];if(String(msg.id)!==String(id))return {ignored:true};const p=await getOne(keyOf(j.group,id));if(p){p.deep={status:'failed',error:String(msg.error||'unknown').slice(0,240),at:new Date().toISOString(),diagnostics:msg.details||null};await putOne(p);}j.deepErrors++;j.index++;j.note=`Недоступен пост ${id}: записана ошибка, идём дальше`;await setJob(j);if(j.index>=j.queue.length)await finish(j);else await navigateCurrent(j);return {ok:true,index:j.index};}
-async function finish(j){j.stage='done';j.paused=false;j.finishedAt=now();if(j.queue?.length){const order=Array.isArray(j.discoveryOrder)&&j.discoveryOrder.length?j.discoveryOrder:j.queue;j.lastCollectedPostId=String(order[order.length-1]);await setCheckpoint(j.group,j.lastCollectedPostId,{source_job_id:j.id,deep_done:j.deepDone,deep_errors:j.deepErrors,algorithm:CHECKPOINT_ALGORITHM,version:VERSION});await setPageCheckpoint(j.tabId,j.group,j.lastCollectedPostId);}j.note=`Обработано ${j.deepDone}/${j.queue.length}; ошибок ${j.deepErrors}. Следующая доверенная граница: ${j.lastCollectedPostId||'не изменена'}. Полнота комментариев не гарантирована.`;await setJob(j);try{await chrome.tabs.create({url:chrome.runtime.getURL('export.html')});}catch{}return j;}
+async function finish(j){j.stage='done';j.paused=false;j.finishedAt=now();if(j.queue?.length){const order=Array.isArray(j.discoveryOrder)&&j.discoveryOrder.length?j.discoveryOrder:j.queue;j.lastCollectedPostId=String(order[order.length-1]);const historical=await mergeHistory(j.group,order,j.tabId);j.historyCount=historical.size;await setCheckpoint(j.group,j.lastCollectedPostId,{source_job_id:j.id,deep_done:j.deepDone,deep_errors:j.deepErrors,algorithm:CHECKPOINT_ALGORITHM,version:VERSION});await setPageCheckpoint(j.tabId,j.group,j.lastCollectedPostId);}j.note=`Обработано ${j.deepDone}/${j.queue.length}; ошибок ${j.deepErrors}. Следующая доверенная граница: ${j.lastCollectedPostId||'не изменена'}. История известных ID: ${j.historyCount||0}. Полнота комментариев не гарантирована.`;await setJob(j);try{await chrome.tabs.create({url:chrome.runtime.getURL('export.html')});}catch{}return j;}
 let mutex=Promise.resolve();function serial(task){const next=mutex.then(task,task);mutex=next.catch(()=>{});return next;}
 chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{serial(async()=>{if(sender.tab&&!(msg.type==='exportSlice'&&sender.url?.split(/[?#]/,1)[0]===chrome.runtime.getURL('export.html'))){const j=await getJob();if(sender.frameId&&sender.frameId!==0)return {ignored:true};if(msg.type!=='status'&&(!j||sender.tab.id!==j.tabId||groupOf(sender.tab.url)!==j.group))return {ignored:true};if(['start','resume','collectFound','pause'].includes(msg.type))return {ignored:true};}switch(msg.type){
  case 'start':return start(msg);
  case 'pause':return pause();
  case 'resume':return resume(msg.tabId,msg.url);
  case 'collectFound':return collectFound(msg.tabId,msg.url);
- case 'resetCheckpoint':{const j=await getJob();const group=msg.group||j?.group;if(!group)throw Error('Группа не определена');await setCheckpoint(group,null);if(j?.group===group)await setPageCheckpoint(j.tabId,group,null);if(j?.group===group&&j.stage==='stalled'&&j.stall?.resumeStage==='discover'){j.checkpointPostId=null;j.checkpointPending=false;j.checkpointFound=false;j.checkpointSeenIds=[];j.discoveryOrder=[];j.stall=null;j.stage='discover';j.paused=false;j.steps=0;j.note='Контрольная точка сброшена вручную. Разведка начата как первый пакет.';await setJob(j);await chrome.tabs.update(j.tabId,{url:'https://www.facebook.com/groups/'+encodeURIComponent(group)+'/'});}return getJob();}
+ case 'resetCheckpoint':{const j=await getJob();const group=msg.group||j?.group;if(!group)throw Error('Группа не определена');await setCheckpoint(group,null);if(j?.group===group){await setPageCheckpoint(j.tabId,group,null);await clearHistory(group,j.tabId);}else await clearHistory(group,null);if(j?.group===group&&j.stage==='stalled'&&j.stall?.resumeStage==='discover'){j.checkpointPostId=null;j.checkpointPending=false;j.checkpointFound=false;j.checkpointSeenIds=[];j.discoveryOrder=[];j.historyRejected=0;j.historyCount=0;j.rewindPending=false;j.rewindVerified=true;j.rewindDiagnostics=null;j.stall=null;j.stage='discover';j.paused=false;j.steps=0;j.note='Контрольная точка сброшена вручную. Разведка начата как первый пакет.';await setJob(j);await chrome.tabs.update(j.tabId,{url:'https://www.facebook.com/groups/'+encodeURIComponent(group)+'/'});}return getJob();}
  case 'status':{const j=await getJob();return sender.tab&&(sender.tab.id!==j?.tabId||groupOf(sender.tab.url)!==j?.group)?null:j;}
+ case 'rewindResult':return rewindResult(msg,sender);
  case 'discover':return discovered(msg,sender);
  case 'obstructed':return obstructed(msg,sender);
  case 'endDiscovery':return endDiscovery(msg,sender);
