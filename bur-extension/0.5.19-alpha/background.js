@@ -142,26 +142,53 @@ async function start({tabId,url,options={},replacePaused=false,startAfter=null})
  if(hasCheckpoint){await chrome.tabs.reload(tabId);return j;}
  await notifyTab(tabId);return j;
 }
-async function pause(){const j=await getJob();if(!j)return null;j.paused=true;j.note='Остановлено пользователем';return setJob(j);}
-async function resume(tabId,url){const j=await getJob();if(!j)throw Error('Нет задания');if(j.stage==='done')throw Error('Задание завершено. Запустите новый сбор.');
- if(tabId!==j.tabId)throw Error('Задание привязано к исходной вкладке группы '+j.group+'. Вернитесь в неё.');const currentGroup=groupOf(url);if(currentGroup&&currentGroup!==j.group)throw Error('Задание привязано к группе '+j.group+'. Текущая вкладка открыта в другой группе; переход отменён.');
- await chrome.tabs.get(j.tabId);
+async function pause(){const j=await getJob();if(!j)return null;j.paused=true;j.note='Сессия поставлена на паузу. Позиция feed-вкладки сохранена.';return setJob(j);}
+async function resume(tabId,url){
+ const j=await getJob();if(!j)throw Error('Нет задания');
+ if(tabId!==feedId(j))throw Error('Сессия привязана к исходной вкладке ленты '+j.group+'. Вернитесь в неё.');
+ if(groupOf(url)!==j.group)throw Error('Сессия привязана к группе '+j.group+'. Текущая вкладка открыта в другой группе.');
  j.paused=false;j.resumeCount=(j.resumeCount||0)+1;
- if(j.stage==='stalled'){j.stage=['discover','deep'].includes(j.stall?.resumeStage)?j.stall.resumeStage:'discover';if(j.stage==='discover'&&j.steps>=j.options.maxSteps)j.options.maxSteps+=200;}
- j.note='Продолжение '+(j.stage==='deep'?'подробного извлечения':'разведки');await setJob(j);
+ if(j.stage==='stalled'){j.stage=j.stall?.resumeStage||'discover';j.stall=null;}
+ await setJob(j);
  if(j.stage==='deep')await navigateCurrent(j);
- else {const feed='https://www.facebook.com/groups/'+encodeURIComponent(j.group)+'/';if(groupOf(url)!==j.group||!/^\/groups\/[^/]+\/?$/.test(new URL(url).pathname))await chrome.tabs.update(tabId,{url:feed});else {await ensureContent(tabId,j.group);await notifyTab(tabId);}}
- return j;
+ else if(j.stage==='exporting')await openExport(j);
+ else if(j.stage==='discover'){
+  const tab=await chrome.tabs.get(feedId(j));
+  if(!isRootFeedUrl(tab.url,j.group))await recoverFeedFromCheckpoint(j,'Вкладка ленты потеряла корневую страницу при возобновлении',{url:tab.url});
+  else await notifyTab(feedId(j));
+ }
+ return getJob();
 }
-async function beginDeep(j,reason){if(!j||!['discover','stalled'].includes(j.stage))return j;
+async function ensureDeepTab(j){
+ const id=j.queue?.[j.index];if(!id)return null;
+ const url=C.canonicalUrl(j.group,id);let tab=null;
+ if(j.deepTabId){try{tab=await chrome.tabs.get(j.deepTabId);}catch{}}
+ if(!tab){
+  tab=await chrome.tabs.create({url,active:false});
+  if(!tab?.id)throw Error('Не удалось создать служебную deep-вкладку');
+  j.deepTabId=tab.id;await setJob(j);return tab;
+ }
+ return tab;
+}
+async function beginDeep(j,reason){
+ if(!j||!['discover','stalled'].includes(j.stage))return j;
  if(j.checkpointPending)throw Error('Контрольная точка ещё не найдена. До неё Бур только листает и ничего не сохраняет.');
+ if(j.liveBoundaryPending)throw Error('Живая граница предыдущего пакета ещё не подтверждена.');
  const all=await allPosts(j.group),byId=new Map(all.filter(p=>p.post_id).map(p=>[String(p.post_id),p]));
  let ids=(Array.isArray(j.discoveryOrder)?j.discoveryOrder:[]).map(String).filter(id=>byId.has(id));
  if(!ids.length&&all.length)ids=all.filter(p=>p.post_id).sort((a,b)=>String(a.first_seen||'').localeCompare(String(b.first_seen||''))||String(a.key).localeCompare(String(b.key))).map(p=>String(p.post_id));
- j.queue=ids;j.index=0;j.stage='deep';j.paused=false;j.stall=null;j.note=`Разведка окончена (${reason}). Подробный сбор ВСЕХ ${j.queue.length} публикаций в порядке фактической прокрутки — без отбора.`;
- await setJob(j);if(j.queue.length)await navigateCurrent(j);else await finish(j);return j;
+ j.queue=ids;j.index=0;j.stage='deep';j.paused=false;j.stall=null;j.batchDeepStartedAt=now();
+ j.note='Пакет '+j.batchNumber+': разведка окончена ('+reason+'). Feed-вкладка остаётся на месте; deep идёт в отдельной вкладке.';
+ await setJob(j);
+ if(j.queue.length){await ensureDeepTab(j);await navigateCurrent(j);}else await finishBatch(j);
+ return getJob();
 }
-async function collectFound(tabId,url){const j=await getJob();if(!j||!(j.stage==='discover'||j.stage==='stalled'&&j.stall?.resumeStage==='discover'))throw Error('Сначала запустите разведку');if(groupOf(url)!==j.group)throw Error('Откройте группу '+j.group);if(tabId!==j.tabId)throw Error('Вернитесь в исходную вкладку группы '+j.group);if(j.checkpointPending)throw Error('Контрольная точка '+j.checkpointPostId+' ещё не найдена; до неё Бур ничего не сохраняет.');await ensureContent(j.tabId,j.group);return beginDeep(j,'нажата кнопка «Собрать найденные»');}
+async function collectFound(tabId,url){
+ const j=await getJob();if(!j||!(j.stage==='discover'||j.stage==='stalled'&&j.stall?.resumeStage==='discover'))throw Error('Сначала запустите разведку');
+ if(groupOf(url)!==j.group||tabId!==feedId(j))throw Error('Вернитесь в исходную вкладку группы '+j.group);
+ if(j.checkpointPending||j.liveBoundaryPending)throw Error('Граница продолжения ещё не подтверждена; до неё Бур ничего не сохраняет.');
+ return beginDeep(j,'нажата кнопка «Собрать найденные»');
+}
 async function stall(j,reason,details,resumeStage){j.stage='stalled';j.paused=true;j.stall={at:new Date().toISOString(),reason,details:details||null,resumeStage:resumeStage||j.stage};j.note='Приостановлено: '+reason+'. Не отмечено как успешное завершение.';await setJob(j);return j;}
 async function obstructed(msg,sender){
  const j=await getJob();if(!j||j.paused||!['discover','deep'].includes(j.stage)||sender.tab?.id!==j.tabId)return {ignored:true};
