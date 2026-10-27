@@ -1,0 +1,12 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {validate}=require('./batch-preflight.js');
+const batch={schema:'bur-collector/1',group:'backpackIL',created_at:'2026-10-27T00:00:00Z',job_summary:{id:'abc-b0001',checkpoint_post_id:'1727687685009933',checkpoint_found_at:null},posts:[{post_id:'1727687685009933',source_page:'https://www.facebook.com/groups/backpackIL/posts/1727687685009933/'},{post_id:'1727687685009933'},{post_id:'1761943778250990'}]};
+let result=validate(batch);
+assert.equal(result.ok,true);assert.equal(result.raw_posts,3);assert.equal(result.unique_posts,2);
+assert(result.warnings.some(x=>x.includes('not confirmed')));
+assert.equal(result.rows[0].group_slug,'backpackIL');
+assert.equal(validate({...batch,posts:[{}]}).ok,false);
+assert.equal(validate({...batch,schema:'other'}).ok,false);
+assert.equal(validate({...batch,group:'../bad'}).ok,false);
+console.log('PASS raw batch preflight, duplicate handling, checkpoint continuity, schema rejection');
