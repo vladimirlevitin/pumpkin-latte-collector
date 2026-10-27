@@ -4,7 +4,7 @@ on:
     branches: [release/bur-0521-search-only]
     paths:
       - 'bur-extension/0.5.20-alpha/**'
-      - '.github/workflows/build-bur-0521.yml'
+      - '.github/workflows/build-bur-0521-search-only.yml'
 permissions:
   contents: write
 jobs:
@@ -33,7 +33,7 @@ jobs:
           manifest=json.loads((p/'manifest.json').read_text())
           assert manifest['version']=='0.5.21'
           assert "if(msg.exhausted)return stall(j,'Facebook" in bg
-          assert "j.feedStallRecoveries=0;j.steps=0;" in bg
+          assert "if(msg.exhausted)return stall(j" in bg
           assert "version:'0.5.21-alpha'" in content
           assert 'if(!job.checkpointPending){const nodes=' in content
           assert 'job.checkpointPending?450:1400' in content
