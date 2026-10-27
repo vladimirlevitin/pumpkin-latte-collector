@@ -1,8 +1,8 @@
-/* FB Bur 0.5.19-alpha. Continuous feed session: feed tab stays put; deep runs in a service tab. */
+/* FB Bur 0.5.20-alpha. Continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
 importScripts('core.js');
 const C=globalThis.FBBurCore;
-const DB='bur-collector-v05', DBVER=1,JOB_KEY='burCollectorJob-v0519',CHECKPOINT_KEY='burCollectorCheckpoints-v0519',HISTORY_KEY='burCollectorHistory-v0519',ALARM='bur-collector-watchdog';
-const VERSION='0.5.19-alpha',CHECKPOINT_ALGORITHM='continuous_feed_v3',HISTORY_LIMIT=50000,now=()=>Date.now();
+const DB='bur-collector-v05', DBVER=1,JOB_KEY='burCollectorJob-v0520',CHECKPOINT_KEY='burCollectorCheckpoints-v0520',HISTORY_KEY='burCollectorHistory-v0520',ALARM='bur-collector-watchdog';
+const VERSION='0.5.20-alpha',CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
 const historyCache=new Map();
 const DEFAULTS={maxPosts:50,maxSteps:15000};
 function groupOf(url){try{const u=new URL(url);if(!['www.facebook.com','web.facebook.com'].includes(u.hostname))return null;return decodeURIComponent(u.pathname.match(/^\/groups\/([^/]+)/)?.[1]||'')||null;}catch{return null;}}
@@ -96,6 +96,22 @@ async function admitRows(j,rows){
  return {added:newIds.length,updated:db.updated||0,stored:toStore.length,newIds,historyRejected};
 }
 async function notifyTab(tabId){try{await chrome.tabs.sendMessage(tabId,{type:'burWake'});}catch(e){console.warn('Bur wake',safeError(e));}}
+async function probeFeedState(tabId,group){
+ try{
+  const tab=await chrome.tabs.get(tabId);
+  if(groupOf(tab.url)!==group||!isRootFeedUrl(tab.url,group))return {ok:false,reason:'not_root_feed',url:tab.url||null};
+  const r=await chrome.tabs.sendMessage(tabId,{type:'burPing'});
+  if(!r?.ready||r.version!==VERSION)return {ok:false,reason:'content_version',version:r?.version||null,url:tab.url||null};
+  return {ok:true,pageInstance:String(r.pageInstance||''),scrollY:Number(r.scrollY)||0,url:tab.url||null};
+ }catch(e){return {ok:false,reason:'probe_failed',error:safeError(e)};}
+}
+function feedPositionPreserved(j,probe){
+ if(!probe?.ok||!probe.pageInstance||!j.feedPageInstance||probe.pageInstance!==j.feedPageInstance)return false;
+ const before=Number(j.feedAnchorScrollY),after=Number(probe.scrollY);
+ if(!Number.isFinite(before)||before<1||!Number.isFinite(after))return true;
+ const tolerance=Math.max(2500,Math.round(before*0.15));
+ return after>=Math.max(0,before-tolerance);
+}
 async function ensureContent(tabId,group){
  const tab=await chrome.tabs.get(tabId);
  if(groupOf(tab.url)!==group)throw Error('Вкладка ещё не открыта в нужной Facebook-группе');
@@ -122,7 +138,7 @@ function senderRole(j,sender){const id=sender?.tab?.id;if(!j||!id)return null;if
 async function start({tabId,url,options={},replacePaused=false,startAfter=null}){
  const group=groupOf(url);
  if(!group||!isRootFeedUrl(url,group))throw Error('Откройте корень ленты нужной Facebook-группы');
- await ensureContent(tabId,group);
+ const feedReady=await ensureContent(tabId,group);
  const existing=await getJob();
  if(existing&&existing.stage!=='done'&&!(replacePaused&&existing.paused))throw Error('Сбор уже существует: нажмите «Продолжить» либо поставьте его на паузу перед запуском другой группы.');
  const opts={maxPosts:Math.max(5,Math.min(5000,Math.trunc(Number(options.maxPosts)||DEFAULTS.maxPosts))),maxSteps:Math.max(100,Math.min(50000,Math.trunc(Number(options.maxSteps)||DEFAULTS.maxSteps)))};
@@ -137,6 +153,7 @@ async function start({tabId,url,options={},replacePaused=false,startAfter=null})
   steps:0,discovered:0,deepDone:0,deepErrors:0,queue:[],discoveryOrder:[],checkpointSeenIds:[],historyRejected:0,historyCount:history.size,index:0,options:opts,
   checkpointPostId:checkpoint?.post_id||null,checkpointPending:hasCheckpoint,checkpointFound:false,checkpointScanSteps:0,checkpointSource:manual?'manual':(checkpoint?.recovered_after_reinstall?'facebook_localstorage':'stored'),
   rewindPending:hasCheckpoint,rewindVerified:!hasCheckpoint,rewindDiagnostics:null,liveBoundaryPending:false,liveBoundaryPostId:null,liveBoundaryScanSteps:0,
+  feedPageInstance:String(feedReady?.pageInstance||''),feedAnchorScrollY:Number(feedReady?.scrollY)||0,feedAnchorAt:new Date().toISOString(),feedContinuationMode:'start',
   note:hasCheckpoint?'Аварийный старт: возвращаю ленту наверх и ищу checkpoint '+checkpoint.post_id+'. После него сессия будет идти непрерывно.':'Непрерывная сессия: вкладка ленты остаётся на месте, deep выполняется отдельно.'};
  await setJob(j);
  if(hasCheckpoint){await chrome.tabs.reload(tabId);return j;}
@@ -174,6 +191,8 @@ async function beginDeep(j,reason){
  if(!j||!['discover','stalled'].includes(j.stage))return j;
  if(j.checkpointPending)throw Error('Контрольная точка ещё не найдена. До неё Бур только листает и ничего не сохраняет.');
  if(j.liveBoundaryPending)throw Error('Живая граница предыдущего пакета ещё не подтверждена.');
+ const feedProbe=await probeFeedState(feedId(j),j.group);
+ if(feedProbe.ok){j.feedPageInstance=feedProbe.pageInstance;j.feedAnchorScrollY=feedProbe.scrollY;j.feedAnchorAt=new Date().toISOString();j.feedContinuationMode='deep_anchor';}
  const all=await allPosts(j.group),byId=new Map(all.filter(p=>p.post_id).map(p=>[String(p.post_id),p]));
  let ids=(Array.isArray(j.discoveryOrder)?j.discoveryOrder:[]).map(String).filter(id=>byId.has(id));
  if(!ids.length&&all.length)ids=all.filter(p=>p.post_id).sort((a,b)=>String(a.first_seen||'').localeCompare(String(b.first_seen||''))||String(a.key).localeCompare(String(b.key))).map(p=>String(p.post_id));
@@ -210,9 +229,25 @@ async function recoverFeedFromCheckpoint(j,reason,details=null){
  await setJob(j);return j;
 }
 async function resumeFeedAtLiveBoundary(j){
- let tab=null;try{tab=await chrome.tabs.get(feedId(j));}catch{}
- if(!tab||!isRootFeedUrl(tab.url,j.group))return recoverFeedFromCheckpoint(j,'Feed-вкладка недоступна после экспорта',{url:tab?.url||null});
- await notifyTab(feedId(j));return j;
+ const probe=await probeFeedState(feedId(j),j.group);
+ if(!probe.ok)return recoverFeedFromCheckpoint(j,'Feed-вкладка недоступна после экспорта',probe);
+ if(!feedPositionPreserved(j,probe)){
+  return recoverFeedFromCheckpoint(j,'Feed-страница реально перезагрузилась или потеряла живую позицию',{
+   expectedPageInstance:j.feedPageInstance||null,
+   actualPageInstance:probe.pageInstance||null,
+   anchorScrollY:j.feedAnchorScrollY??null,
+   actualScrollY:probe.scrollY??null
+  });
+ }
+ j.liveBoundaryPending=false;
+ j.liveBoundaryPostId=j.lastCollectedPostId||j.checkpointPostId||null;
+ j.liveBoundaryScanSteps=0;
+ j.feedPageInstance=probe.pageInstance;
+ j.feedAnchorScrollY=probe.scrollY;
+ j.feedContinuationVerifiedAt=new Date().toISOString();
+ j.feedContinuationMode='same_document';
+ j.note='Пакет '+j.batchNumber+': живая feed-страница подтверждена; продолжаю с текущей позиции без повторного поиска checkpoint.';
+ await setJob(j);await notifyTab(feedId(j));return j;
 }
 async function obstructed(msg,sender){
  const j=await getJob();if(!j||j.paused)return {ignored:true};const role=senderRole(j,sender);
@@ -284,7 +319,11 @@ async function endDiscovery(msg,sender){
  if(j.feedStallRecoveries<=8){
   j.resumeCount=(j.resumeCount||0)+1;j.lastSeen=now();j.note='Лента временно не двигается. Автоповтор '+j.feedStallRecoveries+'/8 без потери позиции.';await setJob(j);await notifyTab(feedId(j));return j;
  }
- if(j.lastCollectedPostId||j.checkpointPostId)return recoverFeedFromCheckpoint(j,'Лента не продвигается после 8 автоповторов',msg.diagnostics);
+ const probe=await probeFeedState(feedId(j),j.group);
+ if(probe.ok&&feedPositionPreserved(j,probe)){
+  return stall(j,'Лента не продвигается после 8 автоповторов, но живая feed-страница сохранена; checkpoint recovery не запускаю',{diagnostics:msg.diagnostics,feed:probe},'discover');
+ }
+ if(j.lastCollectedPostId||j.checkpointPostId)return recoverFeedFromCheckpoint(j,'Лента не продвигается после 8 автоповторов и живая feed-позиция потеряна',{diagnostics:msg.diagnostics,feed:probe});
  return stall(j,msg.reason||'Лента не продвигается',msg.diagnostics,'discover');
 }
 async function navigateCurrent(j){
@@ -313,7 +352,7 @@ async function finishBatch(j){
  if(j.lastCollectedPostId){const historical=await mergeHistory(j.group,order,feedId(j));j.historyCount=historical.size;await setCheckpoint(j.group,j.lastCollectedPostId,{source_job_id:j.id,batch_number:j.batchNumber,algorithm:CHECKPOINT_ALGORITHM,version:VERSION});await setPageCheckpoint(feedId(j),j.group,j.lastCollectedPostId);}
  j.stage='exporting';j.batchFinishedAt=now();j.note='Пакет '+j.batchNumber+' обработан. Автоматически сохраняю JSON; feed-вкладка не перемещалась.';await setJob(j);await openExport(j);return j;
 }
-async function exportComplete(msg){const j=await getJob();if(!j||j.stage!=='exporting'||Number(msg.batchNumber)!==Number(j.batchNumber))return {ignored:true};const count=j.queue?.length||j.discovered||0,boundary=j.lastCollectedPostId,wasPaused=Boolean(j.paused);j.completedBatches++;j.sessionPosts+=count;j.sessionDeepDone+=j.deepDone||0;j.sessionDeepErrors+=j.deepErrors||0;j.lastExport={at:new Date().toISOString(),batchNumber:j.batchNumber,downloadId:msg.downloadId??null,filename:msg.filename||null,posts:count,boundary};await clearGroup(j.group);j.batchNumber++;j.batchStartedAt=now();j.stage='discover';j.paused=wasPaused;j.steps=0;j.discovered=0;j.deepDone=0;j.deepErrors=0;j.queue=[];j.index=0;j.discoveryOrder=[];j.checkpointSeenIds=[];j.historyRejected=0;j.feedStallRecoveries=0;j.checkpointPostId=boundary;j.checkpointPending=false;j.checkpointFound=true;j.checkpointSource='live_session';j.liveBoundaryPostId=boundary;j.liveBoundaryPending=Boolean(boundary);j.liveBoundaryScanSteps=0;j.resumeCount=(j.resumeCount||0)+1;j.deepPhase=null;j.currentId=null;j.note='Пакет '+(j.batchNumber-1)+' сохранён. '+(wasPaused?'Сессия остаётся на паузе.':'Продолжаю следующий пакет с живой позиции.');await setJob(j);if(!wasPaused)await resumeFeedAtLiveBoundary(j);return getJob();}
+async function exportComplete(msg){const j=await getJob();if(!j||j.stage!=='exporting'||Number(msg.batchNumber)!==Number(j.batchNumber))return {ignored:true};const count=j.queue?.length||j.discovered||0,boundary=j.lastCollectedPostId,wasPaused=Boolean(j.paused);j.completedBatches++;j.sessionPosts+=count;j.sessionDeepDone+=j.deepDone||0;j.sessionDeepErrors+=j.deepErrors||0;j.lastExport={at:new Date().toISOString(),batchNumber:j.batchNumber,downloadId:msg.downloadId??null,filename:msg.filename||null,posts:count,boundary};await clearGroup(j.group);j.batchNumber++;j.batchStartedAt=now();j.stage='discover';j.paused=wasPaused;j.steps=0;j.discovered=0;j.deepDone=0;j.deepErrors=0;j.queue=[];j.index=0;j.discoveryOrder=[];j.checkpointSeenIds=[];j.historyRejected=0;j.feedStallRecoveries=0;j.checkpointPostId=boundary;j.checkpointPending=false;j.checkpointFound=true;j.checkpointSource='live_session';j.liveBoundaryPostId=boundary;j.liveBoundaryPending=false;j.liveBoundaryScanSteps=0;j.resumeCount=(j.resumeCount||0)+1;j.deepPhase=null;j.currentId=null;j.note='Пакет '+(j.batchNumber-1)+' сохранён. '+(wasPaused?'Сессия остаётся на паузе.':'Продолжаю следующий пакет с живой позиции.');await setJob(j);if(!wasPaused)await resumeFeedAtLiveBoundary(j);return getJob();}
 async function exportFailed(msg){const j=await getJob();if(!j||j.stage!=='exporting')return {ignored:true};return stall(j,'Не удалось автоматически сохранить JSON-пакет',{batch:j.batchNumber,error:msg.error||null},'exporting');}
 let mutex=Promise.resolve();function serial(task){const next=mutex.then(task,task);mutex=next.catch(()=>{});return next;}
 chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{serial(async()=>{
