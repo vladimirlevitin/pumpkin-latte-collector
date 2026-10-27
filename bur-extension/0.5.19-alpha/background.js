@@ -316,30 +316,59 @@ async function finishBatch(j){
 async function exportComplete(msg){const j=await getJob();if(!j||j.stage!=='exporting'||Number(msg.batchNumber)!==Number(j.batchNumber))return {ignored:true};const count=j.queue?.length||j.discovered||0,boundary=j.lastCollectedPostId,wasPaused=Boolean(j.paused);j.completedBatches++;j.sessionPosts+=count;j.sessionDeepDone+=j.deepDone||0;j.sessionDeepErrors+=j.deepErrors||0;j.lastExport={at:new Date().toISOString(),batchNumber:j.batchNumber,downloadId:msg.downloadId??null,filename:msg.filename||null,posts:count,boundary};await clearGroup(j.group);j.batchNumber++;j.batchStartedAt=now();j.stage='discover';j.paused=wasPaused;j.steps=0;j.discovered=0;j.deepDone=0;j.deepErrors=0;j.queue=[];j.index=0;j.discoveryOrder=[];j.checkpointSeenIds=[];j.historyRejected=0;j.feedStallRecoveries=0;j.checkpointPostId=boundary;j.checkpointPending=false;j.checkpointFound=true;j.checkpointSource='live_session';j.liveBoundaryPostId=boundary;j.liveBoundaryPending=Boolean(boundary);j.liveBoundaryScanSteps=0;j.resumeCount=(j.resumeCount||0)+1;j.deepPhase=null;j.currentId=null;j.note='Пакет '+(j.batchNumber-1)+' сохранён. '+(wasPaused?'Сессия остаётся на паузе.':'Продолжаю следующий пакет с живой позиции.');await setJob(j);if(!wasPaused)await resumeFeedAtLiveBoundary(j);return getJob();}
 async function exportFailed(msg){const j=await getJob();if(!j||j.stage!=='exporting')return {ignored:true};return stall(j,'Не удалось автоматически сохранить JSON-пакет',{batch:j.batchNumber,error:msg.error||null},'exporting');}
 let mutex=Promise.resolve();function serial(task){const next=mutex.then(task,task);mutex=next.catch(()=>{});return next;}
-chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{serial(async()=>{if(sender.tab&&!(msg.type==='exportSlice'&&sender.url?.split(/[?#]/,1)[0]===chrome.runtime.getURL('export.html'))){const j=await getJob();if(sender.frameId&&sender.frameId!==0)return {ignored:true};if(msg.type!=='status'&&(!j||sender.tab.id!==j.tabId||groupOf(sender.tab.url)!==j.group))return {ignored:true};if(['start','resume','collectFound','pause'].includes(msg.type))return {ignored:true};}switch(msg.type){
- case 'start':return start(msg);
- case 'pause':return pause();
- case 'resume':return resume(msg.tabId,msg.url);
- case 'collectFound':return collectFound(msg.tabId,msg.url);
- case 'resetCheckpoint':{const j=await getJob();const group=msg.group||j?.group;if(!group)throw Error('Группа не определена');await setCheckpoint(group,null);if(j?.group===group){await setPageCheckpoint(j.tabId,group,null);await clearHistory(group,j.tabId);}else await clearHistory(group,null);if(j?.group===group&&j.stage==='stalled'&&j.stall?.resumeStage==='discover'){j.checkpointPostId=null;j.checkpointPending=false;j.checkpointFound=false;j.checkpointSeenIds=[];j.discoveryOrder=[];j.historyRejected=0;j.historyCount=0;j.rewindPending=false;j.rewindVerified=true;j.rewindDiagnostics=null;j.stall=null;j.stage='discover';j.paused=false;j.steps=0;j.note='Контрольная точка сброшена вручную. Разведка начата как первый пакет.';await setJob(j);await chrome.tabs.update(j.tabId,{url:'https://www.facebook.com/groups/'+encodeURIComponent(group)+'/'});}return getJob();}
- case 'status':{const j=await getJob();return sender.tab&&(sender.tab.id!==j?.tabId||groupOf(sender.tab.url)!==j?.group)?null:j;}
- case 'rewindResult':return rewindResult(msg,sender);
- case 'discover':return discovered(msg,sender);
- case 'obstructed':return obstructed(msg,sender);
- case 'endDiscovery':return endDiscovery(msg,sender);
- case 'deepReady':return deepState(msg,sender,'READY');
- case 'deepExpanding':return deepState(msg,sender,'EXPANDING');
- case 'deepMismatch':return deepMismatch(msg,sender);
- case 'deepSnapshot':return completeDeep(msg,sender);
- case 'deepError':return failDeep(msg,sender);
- case 'exportSlice':{const j=await getJob();if(!j)return {items:[],job:null,total:0};const rows=(await allPosts(j.group)).sort((a,b)=>a.key.localeCompare(b.key));const start=Math.max(0,Number(msg.offset)||0);return {job:j,items:rows.slice(start,start+Math.min(50,Number(msg.limit)||50)),total:rows.length};}
- default:throw Error('Неизвестный запрос');
-}}).then(r=>sendResponse({ok:true,result:r})).catch(e=>sendResponse({ok:false,error:safeError(e)}));return true;});
+chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{serial(async()=>{
+ if(sender.frameId&&sender.frameId!==0)return {ignored:true};
+ const exportUrl=chrome.runtime.getURL('export.html'),isExport=sender.url?.split(/[?#]/,1)[0]===exportUrl;
+ const j=await getJob();
+ if(sender.tab&&!isExport){
+  const role=senderRole(j,sender);
+  if(msg.type==='status')return role?{...j,tabRole:role}:null;
+  if(['discover','rewindResult','endDiscovery'].includes(msg.type)&&role!=='feed')return {ignored:true};
+  if(['deepReady','deepExpanding','deepMismatch','deepSnapshot','deepError'].includes(msg.type)&&role!=='deep')return {ignored:true};
+  if(msg.type==='obstructed'&&!role)return {ignored:true};
+  if(['start','resume','collectFound','pause','resetCheckpoint'].includes(msg.type))return {ignored:true};
+ }
+ switch(msg.type){
+  case 'start':return start(msg);
+  case 'pause':return pause();
+  case 'resume':return resume(msg.tabId,msg.url);
+  case 'collectFound':return collectFound(msg.tabId,msg.url);
+  case 'resetCheckpoint':{
+   const cur=await getJob(),group=msg.group||cur?.group;if(!group)throw Error('Группа не определена');
+   if(cur&&cur.group===group&&!cur.paused)throw Error('Сначала поставьте активную сессию на паузу');
+   await setCheckpoint(group,null);const ft=cur?.group===group?feedId(cur):null;if(ft){await setPageCheckpoint(ft,group,null);await clearHistory(group,ft);}else await clearHistory(group,null);
+   if(cur?.group===group){await clearGroup(group);cur.checkpointPostId=null;cur.checkpointPending=false;cur.checkpointFound=false;cur.lastCollectedPostId=null;cur.liveBoundaryPending=false;cur.liveBoundaryPostId=null;cur.discoveryOrder=[];cur.queue=[];cur.discovered=0;cur.index=0;cur.steps=0;cur.historyCount=0;cur.stage='discover';cur.paused=true;cur.note='Checkpoint и история ID сброшены. Для чистого старта откройте корень группы и нажмите «Начать».';await setJob(cur);}
+   return getJob();
+  }
+  case 'status':return j;
+  case 'rewindResult':return rewindResult(msg,sender);
+  case 'discover':return discovered(msg,sender);
+  case 'obstructed':return obstructed(msg,sender);
+  case 'endDiscovery':return endDiscovery(msg,sender);
+  case 'deepReady':return deepState(msg,sender,'READY');
+  case 'deepExpanding':return deepState(msg,sender,'EXPANDING');
+  case 'deepMismatch':return deepMismatch(msg,sender);
+  case 'deepSnapshot':return completeDeep(msg,sender);
+  case 'deepError':return failDeep(msg,sender);
+  case 'exportSlice':{
+   if(!isExport)return {ignored:true};if(!j)return {items:[],job:null,total:0};
+   const rows=(await allPosts(j.group)).sort((a,b)=>a.key.localeCompare(b.key)),start=Math.max(0,Number(msg.offset)||0);
+   return {job:j,items:rows.slice(start,start+Math.min(100,Number(msg.limit)||100)),total:rows.length};
+  }
+  case 'exportComplete':if(!isExport)return {ignored:true};return exportComplete(msg);
+  case 'exportFailed':if(!isExport)return {ignored:true};return exportFailed(msg);
+  default:throw Error('Неизвестный запрос');
+ }
+}).then(r=>sendResponse({ok:true,result:r})).catch(e=>sendResponse({ok:false,error:safeError(e)}));return true;});
 chrome.runtime.onInstalled.addListener(()=>chrome.alarms.create(ALARM,{periodInMinutes:1}));
 chrome.alarms.onAlarm.addListener(async a=>{if(a.name!==ALARM)return;try{const j=await getJob();if(!j||j.paused)return;
- if(j.stage==='deep'&&j.deepPhase==='NAVIGATING'&&now()-(j.navStartedAt||0)>150000){await serial(async()=>{const cur=await getJob();if(cur?.stage==='deep'&&!cur.paused&&cur.deepPhase==='NAVIGATING'&&now()-(cur.navStartedAt||0)>150000)await failDeep({id:cur.queue[cur.index],error:'Таймаут навигации к подробной странице >150 сек'}, {tab:{id:cur.tabId}});});}
- if(j.stage==='discover'&&now()-(j.lastSeen||j.startedAt)>180000){await serial(async()=>{const cur=await getJob();if(!cur||cur.stage!=='discover'||cur.paused)return;cur.watchdogRecoveries=(cur.watchdogRecoveries||0)+1;if(cur.watchdogRecoveries>3){await stall(cur,'Лента не отвечает после 3 автоматических перезагрузок',{watchdog:true},'discover');return;}cur.note=`Автовосстановление: лента молчит >180 сек, перезагрузка ${cur.watchdogRecoveries}/3`;cur.lastSeen=now();await setJob(cur);await chrome.tabs.update(cur.tabId,{url:'https://www.facebook.com/groups/'+encodeURIComponent(cur.group)+'/'});});}
+ if(j.stage==='deep'&&j.deepPhase==='NAVIGATING'&&now()-(j.navStartedAt||0)>150000){await serial(async()=>{const cur=await getJob();if(cur?.stage==='deep'&&!cur.paused&&cur.deepPhase==='NAVIGATING'&&now()-(cur.navStartedAt||0)>150000)await failDeep({id:cur.queue[cur.index],error:'Таймаут навигации deep >150 сек'},{tab:{id:deepId(cur)}});});}
+ if(j.stage==='discover'&&now()-(j.lastSeen||j.startedAt)>180000){await serial(async()=>{const cur=await getJob();if(!cur||cur.stage!=='discover'||cur.paused)return;cur.watchdogRecoveries=(cur.watchdogRecoveries||0)+1;if(cur.watchdogRecoveries<=3){cur.resumeCount=(cur.resumeCount||0)+1;cur.lastSeen=now();cur.note='Feed молчит >180 сек: мягкий wake '+cur.watchdogRecoveries+'/3 без потери позиции.';await setJob(cur);await notifyTab(feedId(cur));return;}await recoverFeedFromCheckpoint(cur,'Feed не отвечает после 3 мягких wake',{watchdog:true});});}
+ if(j.stage==='exporting'&&now()-(j.exportStartedAt||0)>120000){await serial(async()=>{const cur=await getJob();if(cur?.stage==='exporting'&&!cur.paused){cur.note='Экспорт не подтвердился за 120 сек — повторяю сохранение того же пакета.';await setJob(cur);await openExport(cur);}});}
 }catch(e){console.warn('Bur watchdog',safeError(e));}});
-// Page-load events actively wake the collector. The process no longer depends on
-// keeping the Facebook tab focused or on a popup remaining open.
-chrome.tabs.onUpdated.addListener((tabId,changeInfo,updatedTab)=>{if(changeInfo.status!=='complete')return;setTimeout(()=>{void serial(async()=>{const j=await getJob();if(!j||j.paused||j.tabId!==tabId||!['discover','deep'].includes(j.stage))return;const tab=updatedTab?.url?updatedTab:await chrome.tabs.get(tabId);if(j.stage==='deep'&&await recoverDeepRedirect(j,tab.url))return;await notifyTab(tabId);});},250);});
+chrome.tabs.onUpdated.addListener((tabId,changeInfo,updatedTab)=>{if(changeInfo.status!=='complete')return;setTimeout(()=>{void serial(async()=>{
+ const j=await getJob();if(!j||j.paused)return;const tab=updatedTab?.url?updatedTab:await chrome.tabs.get(tabId);
+ if(tabId===deepId(j)&&j.stage==='deep'){if(await recoverDeepRedirect(j,tab.url))return;await notifyTab(tabId);return;}
+ if(tabId===feedId(j)&&j.stage==='discover'){if(!isRootFeedUrl(tab.url,j.group)){await recoverFeedFromCheckpoint(j,'Feed-вкладка ушла с корня группы',{url:tab.url});return;}await notifyTab(tabId);}
+});},250);});
+if(chrome.tabs.onRemoved?.addListener)chrome.tabs.onRemoved.addListener((tabId)=>{void serial(async()=>{const j=await getJob();if(!j)return;if(tabId===j.deepTabId){j.deepTabId=null;await setJob(j);if(j.stage==='deep'&&!j.paused)await navigateCurrent(j);}if(tabId===feedId(j)&&!j.paused){j.feedTabId=null;j.tabId=null;await setJob(j);await recoverFeedFromCheckpoint(j,'Feed-вкладка была закрыта',{tabId});}if(tabId===j.exportTabId){j.exportTabId=null;await setJob(j);if(j.stage==='exporting'&&!j.paused)await openExport(j);}});});
