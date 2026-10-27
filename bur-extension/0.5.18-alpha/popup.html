@@ -4,7 +4,7 @@
 <label for="maxPosts">Сколько новых публикаций собрать</label><input id="maxPosts" type="number" min="5" max="5000" value="50"><label for="startAfter">Начать после post_id <small>(оставьте пустым для сохранённой точки)</small></label><input id="startAfter" inputmode="numeric" autocomplete="off" placeholder="например 1760011101777591">
 <div class="actions"><button id="start" class="primary">Начать / продолжить</button><button id="pause">Пауза</button></div>
 <button class="full" id="collect">Закончить разведку и собрать найденные</button>
-<button class="full" id="export">Скачать JSON</button><button class="full" id="refresh">Обновить статус</button><button class="full" id="resetCheckpoint">Сбросить точку продолжения</button>
+<button class="full" id="export">Скачать JSON</button><button class="full" id="refresh">Обновить статус</button><button class="full" id="resetCheckpoint">Сбросить точку и историю ID</button>
 <div id="status" role="status">Подключаюсь…</div>
 <p class="hint"><b>Продолжение:</b> при сохранённом или введённом post_id Бур сначала перезагружает ленту и подтверждает, что она реально находится наверху. До checkpoint он ничего не сохраняет. После границы принимает только новые post_id; уже виденные ID блокируются отдельной историей. Если верх или checkpoint не подтверждены, сбор останавливается безопасно.</p>
 <p class="hint">Сбор работает только с доступным в браузере Facebook. Полнота всех комментариев не гарантирована.</p>
