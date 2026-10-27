@@ -1,11 +1,11 @@
-/* FB Bur core 0.5.17-alpha; offline-testable, no Facebook API bypass. */
+/* FB Bur core 0.5.18-alpha; offline-testable, no Facebook API bypass. */
 (function(root, factory) {
   const api = factory();
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.FBBurCore = api;
 })(typeof window !== 'undefined' ? window : globalThis, function() {
   'use strict';
-  const collector='fb-group-bur/0.5.17-alpha';
+  const collector='fb-group-bur/0.5.18-alpha';
   const clean = (s) => String(s || '').replace(/\u00a0/g,' ').replace(/\r\n/g,'\n').replace(/[ \t]+/g,' ').replace(/\n[ \t]*/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
   const cut = (s,n=40000) => clean(s).slice(0,n);
   const IDPAT=/(?:\/groups\/([^/?#]+)\/(?:posts|permalink)\/(\d+))|(?:[?&]story_fbid=(\d+))/;
