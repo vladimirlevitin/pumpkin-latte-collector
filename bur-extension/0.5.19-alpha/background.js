@@ -189,7 +189,31 @@ async function collectFound(tabId,url){
  if(j.checkpointPending||j.liveBoundaryPending)throw Error('Граница продолжения ещё не подтверждена; до неё Бур ничего не сохраняет.');
  return beginDeep(j,'нажата кнопка «Собрать найденные»');
 }
-async function stall(j,reason,details,resumeStage){j.stage='stalled';j.paused=true;j.stall={at:new Date().toISOString(),reason,details:details||null,resumeStage:resumeStage||j.stage};j.note='Приостановлено: '+reason+'. Не отмечено как успешное завершение.';await setJob(j);return j;}
+async function stall(j,reason,details,resumeStage){j.stage='stalled';j.paused=true;j.stall={at:new Date().toISOString(),reason,details:details||null,resumeStage:resumeStage||j.stage};j.note='Приостановлено: '+reason+'. Данные не отмечены как завершённый пакет.';await setJob(j);return j;}
+async function recoverFeedFromCheckpoint(j,reason,details=null){
+ const boundary=String(j.lastCollectedPostId||j.checkpointPostId||'');
+ if(!/^\d{8,30}$/.test(boundary))return stall(j,'Позиция ленты потеряна, а подтверждённого checkpoint ещё нет',{reason,details},'discover');
+ await clearGroup(j.group);
+ j.stage='discover';j.paused=false;j.steps=0;j.discovered=0;j.deepDone=0;j.deepErrors=0;j.queue=[];j.index=0;j.discoveryOrder=[];j.checkpointSeenIds=[];j.historyRejected=0;
+ j.checkpointPostId=boundary;j.checkpointPending=true;j.checkpointFound=false;j.checkpointScanSteps=0;j.checkpointSource='recovery';
+ j.liveBoundaryPending=false;j.liveBoundaryPostId=null;j.liveBoundaryScanSteps=0;j.rewindPending=true;j.rewindVerified=false;j.rewindDiagnostics=null;
+ j.feedRecoveryCount=(j.feedRecoveryCount||0)+1;j.resumeCount=(j.resumeCount||0)+1;
+ j.note='Позиция живой ленты потеряна. Автовосстановление от checkpoint '+boundary+'; текущий незавершённый пакет отброшен безопасно.';
+ let tab=null;try{tab=await chrome.tabs.get(feedId(j));}catch{}
+ const root='https://www.facebook.com/groups/'+encodeURIComponent(j.group)+'/';
+ if(!tab){
+  tab=await chrome.tabs.create({url:root,active:false});
+  if(!tab?.id)return stall(j,'Не удалось восстановить вкладку ленты',{reason,details},'discover');
+  j.feedTabId=tab.id;j.tabId=tab.id;
+ }else if(!isRootFeedUrl(tab.url,j.group))await chrome.tabs.update(feedId(j),{url:root});
+ else await chrome.tabs.reload(feedId(j));
+ await setJob(j);return j;
+}
+async function resumeFeedAtLiveBoundary(j){
+ let tab=null;try{tab=await chrome.tabs.get(feedId(j));}catch{}
+ if(!tab||!isRootFeedUrl(tab.url,j.group))return recoverFeedFromCheckpoint(j,'Feed-вкладка недоступна после экспорта',{url:tab?.url||null});
+ await notifyTab(feedId(j));return j;
+}
 async function obstructed(msg,sender){
  const j=await getJob();if(!j||j.paused||!['discover','deep'].includes(j.stage)||sender.tab?.id!==j.tabId)return {ignored:true};
  if(j.stage==='deep'){
