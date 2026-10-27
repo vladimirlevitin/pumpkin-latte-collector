@@ -170,9 +170,14 @@ async function resume(tabId,url){
  if(j.stage==='deep')await navigateCurrent(j);
  else if(j.stage==='exporting')await openExport(j);
  else if(j.stage==='discover'){
-  const tab=await chrome.tabs.get(feedId(j));
-  if(!isRootFeedUrl(tab.url,j.group))await recoverFeedFromCheckpoint(j,'Вкладка ленты потеряла корневую страницу при возобновлении',{url:tab.url});
-  else await notifyTab(feedId(j));
+  const probe=await probeFeedState(feedId(j),j.group);
+  if(!probe.ok)await recoverFeedFromCheckpoint(j,'Вкладка ленты недоступна при возобновлении',probe);
+  else if(!j.checkpointPending&&j.feedPageInstance&&!feedPositionPreserved(j,probe)){
+   await recoverFeedFromCheckpoint(j,'При возобновлении обнаружена реальная потеря живой feed-позиции',{
+    expectedPageInstance:j.feedPageInstance,actualPageInstance:probe.pageInstance,
+    anchorScrollY:j.feedAnchorScrollY??null,actualScrollY:probe.scrollY??null
+   });
+  }else await notifyTab(feedId(j));
  }
  return getJob();
 }
@@ -256,7 +261,11 @@ async function obstructed(msg,sender){
  }
  if(role!=='feed'||j.stage!=='discover')return {ignored:true};
  j.obstructionRecoveries=(j.obstructionRecoveries||0)+1;
- if(j.obstructionRecoveries>5)return recoverFeedFromCheckpoint(j,'Facebook более 5 раз подряд перекрыл ленту',msg.diagnostics);
+ if(j.obstructionRecoveries>5){
+  const probe=await probeFeedState(feedId(j),j.group);
+  if(probe.ok&&feedPositionPreserved(j,probe))return stall(j,'Facebook более 5 раз подряд перекрыл ленту, но живая feed-страница сохранена; checkpoint recovery не запускаю',{diagnostics:msg.diagnostics,feed:probe},'discover');
+  return recoverFeedFromCheckpoint(j,'Facebook более 5 раз подряд перекрыл ленту и живая feed-позиция потеряна',{diagnostics:msg.diagnostics,feed:probe});
+ }
  j.note='Автовосстановление ленты после окна Facebook ('+j.obstructionRecoveries+'/5)';j.lastSeen=now();j.resumeCount=(j.resumeCount||0)+1;await setJob(j);await notifyTab(feedId(j));
  return {recovered:true};
 }
@@ -309,7 +318,11 @@ async function discovered(msg,sender){
  const r=await admitRows(j,candidateRows);if(r.added){j.obstructionRecoveries=0;j.feedStallRecoveries=0;}
  j.note='Пакет '+j.batchNumber+': разведка '+j.discovered+'/'+j.options.maxPosts+'; завершено пакетов '+j.completedBatches+'; всего принято '+j.sessionPosts+'.';
  if(j.discovered>=j.options.maxPosts)await beginDeep(j,'достигнут размер пакета');
- else if(j.steps>=j.options.maxSteps)await recoverFeedFromCheckpoint(j,'Достигнут лимит проходов текущей ленты',{steps:j.steps});
+ else if(j.steps>=j.options.maxSteps){
+  const probe=await probeFeedState(feedId(j),j.group);
+  if(probe.ok&&feedPositionPreserved(j,probe))await stall(j,'Достигнут лимит проходов, но живая feed-страница сохранена; checkpoint recovery не запускаю',{steps:j.steps,feed:probe},'discover');
+  else await recoverFeedFromCheckpoint(j,'Достигнут лимит проходов и живая feed-позиция потеряна',{steps:j.steps,feed:probe});
+ }
  else await setJob(j);
  const latest=await getJob();return {...r,stage:latest.stage,discovered:latest.discovered,seekingCheckpoint:false,checkpointFound:latest.checkpointFound,checkpoint:latest.checkpointPostId,discoveryTail:latest.discoveryOrder.slice(-3)};
 }
