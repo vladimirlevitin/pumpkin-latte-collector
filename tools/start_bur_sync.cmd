@@ -4,8 +4,10 @@ title FB Bur -> Supabase Storage Sync
 
 set "SYNC_DIR=%LOCALAPPDATA%\FB-Bur\sync"
 set "BASE_URL=https://raw.githubusercontent.com/vladimirlevitin/pumpkin-latte-collector/bur/supabase-json-importer-v0.1/tools"
+set "WATCHER_LOG=%LOCALAPPDATA%\FB-Bur\watcher-launch.log"
 
 if not exist "%SYNC_DIR%" mkdir "%SYNC_DIR%"
+if not exist "%LOCALAPPDATA%\FB-Bur" mkdir "%LOCALAPPDATA%\FB-Bur"
 
 echo Updating FB Bur sync tools...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
@@ -20,23 +22,36 @@ if errorlevel 1 (
   exit /b 1
 )
 
+set "PYTHON_CMD="
 where py >nul 2>nul
-if not errorlevel 1 (
-  cd /d "%SYNC_DIR%"
-  py -3 watch_bur_downloads.py
-  goto :done
+if not errorlevel 1 set "PYTHON_CMD=py -3"
+if not defined PYTHON_CMD (
+  where python >nul 2>nul
+  if not errorlevel 1 set "PYTHON_CMD=python"
 )
 
-where python >nul 2>nul
-if not errorlevel 1 (
-  cd /d "%SYNC_DIR%"
-  python watch_bur_downloads.py
-  goto :done
+if not defined PYTHON_CMD (
+  echo.
+  echo ERROR: Python 3 was not found on this computer.
+  echo Install Python 3 and run this file again.
+  pause
+  exit /b 1
 )
+
+cd /d "%SYNC_DIR%"
+
+:run
+%PYTHON_CMD% watch_bur_downloads.py
+set "RC=%ERRORLEVEL%"
+
+if "%RC%"=="0" goto :done
 
 echo.
-echo ERROR: Python 3 was not found on this computer.
-echo Install Python 3 and run this file again.
+echo Watcher exited unexpectedly with code %RC%.
+echo It will restart in 5 seconds.
+>>"%WATCHER_LOG%" echo [%DATE% %TIME%] watcher exited with code %RC%
+timeout /t 5 /nobreak >nul
+goto :run
 
 :done
 echo.
