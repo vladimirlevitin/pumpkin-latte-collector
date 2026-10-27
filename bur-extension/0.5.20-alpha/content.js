@@ -1,4 +1,4 @@
-/* FB Bur 0.5.20-alpha: feed-order observations + structured comment threads + live page identity. */
+/* FB Bur 0.5.21-alpha: feed-order observations + structured comment threads + live page identity. */
 (() => {
 'use strict';
 if(window.__burCollector052)return;window.__burCollector052=true;
@@ -81,7 +81,9 @@ async function discover(job){
  }
  const group=job.group;
  // Bounded, user-visible interactions; no hidden endpoints or request interception.
- const nodes=C.postNodes(document);C.expandVisible(nodes,12,'post');await delay(450);
+ const seeking=Boolean(job.checkpointPending);
+ // During checkpoint seeking, do not expand cards or comments: only inspect visible post identities.
+ if(!seeking){const nodes=C.postNodes(document);C.expandVisible(nodes,12,'post');await delay(450);}
  if(await handleObstruction(job,'разведка после раскрытия'))return;
  const observations=feedObservations(group);
  const r=await send('discover',{observations,step:1,viewportHeight:Math.max(1,Number(window.innerHeight)||800)});
@@ -89,7 +91,7 @@ async function discover(job){
  if(r.seekingCheckpoint)noNew=0;else if(r.added)noNew=0;else noNew++;
  const movement=await F.advance(document,window,delay);
  if(movement.blocked){await send('obstructed',{stage:'discover',diagnostics:movement.blocked});return;}
- await delay(1400); // Facebook often loads the next feed slice asynchronously
+ await delay(seeking ? (job.checkpointScanSteps%8===0?1400:250) : 1400); // Fast identity-only seeking, periodic Facebook load waits
  noMove=movement.moved?0:noMove+1;
  if(noMove===8||noMove===16){await delay(noMove===8?3000:7000);const probe=await F.advance(document,window,delay);if(probe.moved){noMove=0;noNew=0;return;}}
  if(noNew>=36||noMove>=24){
