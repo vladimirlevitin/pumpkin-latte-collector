@@ -1,0 +1,16 @@
+name: Archive pipeline preflight
+on:
+  push:
+    branches: [feature/bur-0521-adaptive-seek-integrated]
+    paths:
+      - 'archive-pipeline/**'
+      - '.github/workflows/test-archive-preflight.yml'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node archive-pipeline/test-batch-preflight.js
