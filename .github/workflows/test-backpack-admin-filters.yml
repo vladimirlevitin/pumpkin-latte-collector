@@ -1,0 +1,16 @@
+name: Backpack private pilot facets tests
+on:
+  push:
+    branches: [feature/backpack-admin-pilot-filters-v1]
+    paths:
+      - 'backpack-admin-pilot/**'
+      - '.github/workflows/test-backpack-admin-filters.yml'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node backpack-admin-pilot/facets.test.js
