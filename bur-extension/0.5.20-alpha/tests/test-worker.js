@@ -2,7 +2,7 @@
 const assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
 const root=path.resolve(__dirname,'..'),posts=new Map(),storage={},pageCheckpoints={},pageHistories={};
 const tabs=new Map([[5,{id:5,url:'https://www.facebook.com/groups/backpackIL/',active:true}],[6,{id:6,url:'https://www.facebook.com/groups/pumpkinlatte/',active:false}]]);
-let nextTabId=7,sendListener,alarmListener,tabUpdatedListener,tabRemovedListener,injections=0,reloads=0,connected=false,requests=0;
+let nextTabId=7,sendListener,alarmListener,tabUpdatedListener,tabRemovedListener,injections=0,reloads=0,connected=false,requests=0,feedPageInstance='feed-doc-1',feedScrollY=12000;
 function request(tx,run){const r={};tx.pending++;setImmediate(()=>{try{r.result=run();r.onsuccess?.();}catch(e){r.error=e;r.onerror?.();tx.onerror?.();}finally{tx.pending--;tx.completed();}});return r;}
 class TX{constructor(){this.pending=0;this.complete=false;}completed(){if(!this.pending&&!this.complete)setImmediate(()=>{if(!this.pending&&!this.complete){this.complete=true;this.oncomplete?.();}});}objectStore(){return{get:key=>request(this,()=>posts.get(key)),put:o=>request(this,()=>posts.set(o.key,structuredClone(o))),delete:k=>request(this,()=>posts.delete(k)),index:()=>({getAll:r=>request(this,()=>[...posts.values()].filter(p=>p.group===r.group)),openKeyCursor:r=>{let keys=[...posts.values()].filter(p=>p.group===r.group).map(p=>p.key),ix=0,out={};const step=()=>{if(ix>=keys.length){out.result=null;out.onsuccess?.();return;}out.result={primaryKey:keys[ix++],continue:()=>setImmediate(step)};out.onsuccess?.();};this.pending++;setImmediate(()=>{step();this.pending--;this.completed();});return out;}})};}}
 class DB{constructor(){this.objectStoreNames={contains:()=>true};}transaction(){return new TX();}close(){}createObjectStore(){return{createIndex(){}};}}
@@ -12,7 +12,7 @@ const chrome={runtime:{onMessage:{addListener:cb=>sendListener=cb},onInstalled:{
  update:async(id,data)=>{const t=await chrome.tabs.get(id);Object.assign(t,data);return t;},
  create:async data=>{const t={id:nextTabId++,url:data.url||'about:blank',active:Boolean(data.active)};tabs.set(t.id,t);return t;},
  reload:async id=>{await chrome.tabs.get(id);reloads++;return tabs.get(id);},
- sendMessage:async(id,msg)=>{const t=await chrome.tabs.get(id);if(!connected)throw Error('no receiver');if(msg.type==='burPing')return {ready:true,version:'0.5.19-alpha',location:new URL(t.url).pathname,obstruction:null,detailPost:/\/posts\//.test(t.url)};if(msg.type==='burCheckpointGet')return {post_id:pageCheckpoints[msg.group]||null};if(msg.type==='burCheckpointSet'){if(msg.post_id)pageCheckpoints[msg.group]=String(msg.post_id);else delete pageCheckpoints[msg.group];return {ok:true};}if(msg.type==='burHistoryGet')return {ids:pageHistories[msg.group]||[]};if(msg.type==='burHistorySet'){pageHistories[msg.group]=Array.isArray(msg.ids)?msg.ids.map(String):[];return {ok:true};}return {ready:true};},
+ sendMessage:async(id,msg)=>{const t=await chrome.tabs.get(id);if(!connected)throw Error('no receiver');if(msg.type==='burPing')return {ready:true,version:'0.5.20-alpha',location:new URL(t.url).pathname,pageInstance:feedPageInstance,scrollY:feedScrollY,obstruction:null,detailPost:/\/posts\//.test(t.url)};if(msg.type==='burCheckpointGet')return {post_id:pageCheckpoints[msg.group]||null};if(msg.type==='burCheckpointSet'){if(msg.post_id)pageCheckpoints[msg.group]=String(msg.post_id);else delete pageCheckpoints[msg.group];return {ok:true};}if(msg.type==='burHistoryGet')return {ids:pageHistories[msg.group]||[]};if(msg.type==='burHistorySet'){pageHistories[msg.group]=Array.isArray(msg.ids)?msg.ids.map(String):[];return {ok:true};}return {ready:true};},
  onUpdated:{addListener:cb=>tabUpdatedListener=cb},onRemoved:{addListener:cb=>tabRemovedListener=cb}
 },scripting:{executeScript:async()=>{injections++;connected=true;}},alarms:{create(){},onAlarm:{addListener:cb=>alarmListener=cb}}};
 function spawn(){const context={chrome,indexedDB,IDBKeyRange,URL,console,setTimeout,clearTimeout,Date,structuredClone,fetch:()=>{requests++;throw Error('MUST NOT call model or API')}};context.globalThis=context;const ctx=vm.createContext(context);context.importScripts=(...files)=>{for(const file of files)vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),ctx,{filename:file});};vm.runInContext(fs.readFileSync(path.join(root,'background.js'),'utf8'),ctx,{filename:'background.js'});}
@@ -35,20 +35,25 @@ async function deepAll(){let j=await extCall('status');while(j.stage==='deep'){c
  await deepAll();j=await extCall('status');assert.equal(j.stage,'exporting');assert.equal(j.batchNumber,1);assert.equal(tabs.get(5).url,feedUrl);
  let slice=await extCall('exportSlice',{offset:0,limit:100},exportSender());assert.equal(slice.total,5);
  await extCall('exportComplete',{batchNumber:1,downloadId:11,filename:'b1.json'},exportSender());
- j=await extCall('status');assert.equal(j.stage,'discover');assert.equal(j.batchNumber,2);assert.equal(j.completedBatches,1);assert.equal(j.sessionPosts,5);assert.equal(j.liveBoundaryPending,true);assert.equal(j.liveBoundaryPostId,makePost(4).post_id);assert.equal(tabs.get(5).url,feedUrl);assert.equal(reloads,0);
- // Batch 2 starts from SAME live feed position: boundary is visible, then new posts follow.
- r=await extCall('discover',{observations:[obs(makePost(3),-100),obs(makePost(4),300),obs(makePost(5),500),obs(makePost(6),900)],viewportHeight:800,step:1},feedSender());
- j=await extCall('status');assert.equal(j.liveBoundaryPending,false);assert.equal(j.discovered,2);assert.equal(j.discoveryOrder.join(','),[makePost(5).post_id,makePost(6).post_id].join(','));
- r=await extCall('discover',{observations:[obs(makePost(5),-100),obs(makePost(6),100),obs(makePost(7),300),obs(makePost(8),500),obs(makePost(9),700)],viewportHeight:800,step:1},feedSender());
+ j=await extCall('status');assert.equal(j.stage,'discover');assert.equal(j.batchNumber,2);assert.equal(j.completedBatches,1);assert.equal(j.sessionPosts,5);assert.equal(j.liveBoundaryPending,false);assert.equal(j.liveBoundaryPostId,makePost(4).post_id);assert.equal(j.feedContinuationMode,'same_document');assert.equal(tabs.get(5).url,feedUrl);assert.equal(reloads,0);
+ // Batch 2 starts from the SAME live feed document. The previous boundary card is already virtualized away.
+ // This must still accept new posts immediately instead of rewinding to checkpoint.
+ r=await extCall('discover',{observations:[obs(makePost(5),100),obs(makePost(6),400),obs(makePost(7),700)],viewportHeight:800,step:1},feedSender());
+ j=await extCall('status');assert.equal(j.liveBoundaryPending,false);assert.equal(j.checkpointPending,false);assert.equal(j.discovered,3);assert.equal(j.discoveryOrder.join(','),[5,6,7].map(i=>makePost(i).post_id).join(','));
+ r=await extCall('discover',{observations:[obs(makePost(6),-100),obs(makePost(7),100),obs(makePost(8),300),obs(makePost(9),500)],viewportHeight:800,step:1},feedSender());
  j=await extCall('status');assert.equal(j.stage,'deep');assert.equal(j.queue.join(','),[5,6,7,8,9].map(i=>makePost(i).post_id).join(','));assert.equal(tabs.get(5).url,feedUrl);assert.equal(reloads,0);
  await deepAll();j=await extCall('status');assert.equal(j.stage,'exporting');assert.equal(j.lastCollectedPostId,makePost(9).post_id);
  await extCall('exportComplete',{batchNumber:2,downloadId:12,filename:'b2.json'},exportSender());
- j=await extCall('status');assert.equal(j.batchNumber,3);assert.equal(j.completedBatches,2);assert.equal(j.sessionPosts,10);assert.equal(j.liveBoundaryPostId,makePost(9).post_id);assert.equal(reloads,0);
- // Live boundary disappears and unknown ids appear: safe fallback to checkpoint, not blind acceptance.
- await extCall('discover',{observations:[obs(makePost(20),100),obs(makePost(21),400)],viewportHeight:800,step:1},feedSender());
- j=await extCall('status');assert.equal(j.checkpointPending,true);assert.equal(j.rewindPending,true);assert.equal(j.checkpointPostId,makePost(9).post_id);assert.equal(j.discovered,0);assert.ok(reloads>=1);
+ j=await extCall('status');assert.equal(j.batchNumber,3);assert.equal(j.completedBatches,2);assert.equal(j.sessionPosts,10);assert.equal(j.liveBoundaryPostId,makePost(9).post_id);assert.equal(j.feedContinuationMode,'same_document');assert.equal(reloads,0);
+ // Batch 3 also starts without the boundary card. This is the live regression seen on Facebook after b0002.
+ await extCall('discover',{observations:[obs(makePost(10),100),obs(makePost(11),400),obs(makePost(12),700)],viewportHeight:800,step:1},feedSender());
+ j=await extCall('status');assert.equal(j.checkpointPending,false);assert.equal(j.discovered,3);assert.equal(j.discoveryOrder.join(','),[10,11,12].map(i=>makePost(i).post_id).join(','));assert.equal(reloads,0);
+ // Only a real document replacement is allowed to trigger checkpoint recovery.
+ feedPageInstance='feed-doc-2';feedScrollY=0;
+ for(let i=0;i<9;i++)await extCall('endDiscovery',{reason:'test stall',diagnostics:{i}},feedSender());
+ j=await extCall('status');assert.equal(j.checkpointPending,true);assert.equal(j.rewindPending,true);assert.equal(j.checkpointPostId,makePost(9).post_id);assert.ok(reloads>=1);
  // Foreign group cannot control this session.
  await assert.rejects(extCall('resume',{tabId:6,url:tabs.get(6).url}),/исходной вкладке/);
  assert.equal(requests,0);
- console.log('PASS: two continuous batches keep feed tab fixed; deep tab is separate; only loss of live frontier triggers checkpoint recovery');
+ console.log('PASS: same live feed document continues across b0001/b0002 without boundary rediscovery; only real document loss triggers checkpoint recovery');
 })().catch(e=>{console.error(e);process.exitCode=1;});
