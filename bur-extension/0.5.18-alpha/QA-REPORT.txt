@@ -1,20 +1,24 @@
-FB Bur 0.5.17-alpha QA target
+FB Bur 0.5.18-alpha QA target
 
-Live bug being prevented:
-- 0.5.16 reported 50/50, 0 errors, but its output overlapped the previous package 50/50.
-- Root cause: DOM array position and first_seen were treated as feed order.
+Live failure being prevented:
+- accepted 0.5.17 checkpoint: 1752369412541760;
+- next automatic run reported 50/50, 0 errors;
+- external comparison found only 3 new post_ids and 47 duplicates from older data;
+- seen_before_checkpoint_count=1 proved the collector did not truly traverse from feed top.
 
 Required automated assertions:
-- no data persisted while checkpoint is still below/not reached;
-- checkpoint itself never enters the new package;
-- input observation array may be scrambled without changing feed-order result;
-- posts physically above checkpoint are excluded;
-- posts physically below checkpoint are admitted in top-to-bottom order;
-- old cards retained in DOM remain excluded after boundary;
-- discoveryOrder drives deep queue;
-- adjacent synthetic packages have zero post_id overlap;
-- lastCollectedPostId equals discoveryOrder[-1];
-- trusted checkpoint survives reinstall through facebook.com localStorage v2;
-- legacy 0.5.16 checkpoint namespace is ignored.
+- checkpoint start reloads the Facebook group;
+- stale restored DOM near checkpoint cannot save anything before rewind confirmation;
+- rewindToTop resets feed ancestor, main/document surfaces and requires 3 stable top checks;
+- failed rewind stalls safely with zero stored posts;
+- after confirmed top, seek remains geometry-based;
+- pre-checkpoint ids are persisted to history;
+- old cards re-rendered after the boundary cannot enter the new package;
+- new package has zero overlap with prior synthetic package;
+- discoveryOrder drives deep queue and next checkpoint;
+- checkpoint/history survive extension storage loss through facebook.com localStorage;
+- legacy 0.5.17 checkpoint namespace is ignored.
 
-Live Facebook remains NOT TESTED until the first 0.5.17 backpackIL run.
+Live Facebook remains NOT TESTED for 0.5.18 until backpackIL is seeded manually
+with accepted boundary 1752369412541760 and the resulting package passes external
+post_id comparison against all accepted earlier packages.
