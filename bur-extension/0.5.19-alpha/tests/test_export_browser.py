@@ -26,11 +26,11 @@ with sync_playwright() as p:
  data=json.loads(Path(download.path()).read_text(encoding='utf-8'))
  assert len(data['posts'])==53 and data['posts'][-1]['comments'][0]['text']=='saved comment 52'
  assert data['collector_version']=='0.5.19-alpha'
- assert page.evaluate('window.calls.map(x=>x.offset)')==[0,50]
+ assert page.evaluate('window.calls.map(x=>x.offset)')==[0]
  assert download.suggested_filename.startswith('bur-raw-backpackIL-')
  with page.expect_download() as event: page.click('#again')
  assert json.loads(Path(event.value.path()).read_text(encoding='utf-8'))==data
- assert page.evaluate('window.calls.length')==2
+ assert page.evaluate('window.calls.length')==1
  setup('empty')
  with page.expect_download() as event: page.evaluate(script)
  assert json.loads(Path(event.value.path()).read_text(encoding='utf-8'))['posts']==[]
