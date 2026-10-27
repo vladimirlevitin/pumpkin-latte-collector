@@ -1,4 +1,4 @@
-/* FB Bur 0.5.20-alpha: feed-order observations + structured comment threads + live page identity. */
+/* FB Bur 0.5.21-alpha: feed-order observations + structured comment threads + live page identity. */
 (() => {
 'use strict';
 if(window.__burCollector052)return;window.__burCollector052=true;
@@ -81,7 +81,7 @@ async function discover(job){
  }
  const group=job.group;
  // Bounded, user-visible interactions; no hidden endpoints or request interception.
- const nodes=C.postNodes(document);C.expandVisible(nodes,12,'post');await delay(450);
+ if(!job.checkpointPending){const nodes=C.postNodes(document);C.expandVisible(nodes,12,'post');await delay(450);}
  if(await handleObstruction(job,'разведка после раскрытия'))return;
  const observations=feedObservations(group);
  const r=await send('discover',{observations,step:1,viewportHeight:Math.max(1,Number(window.innerHeight)||800)});
@@ -89,7 +89,7 @@ async function discover(job){
  if(r.seekingCheckpoint)noNew=0;else if(r.added)noNew=0;else noNew++;
  const movement=await F.advance(document,window,delay);
  if(movement.blocked){await send('obstructed',{stage:'discover',diagnostics:movement.blocked});return;}
- await delay(1400); // Facebook often loads the next feed slice asynchronously
+ await delay(job.checkpointPending?450:1400); // Fast checkpoint-only scan; ordinary discovery unchanged
  noMove=movement.moved?0:noMove+1;
  if(noMove===8||noMove===16){await delay(noMove===8?3000:7000);const probe=await F.advance(document,window,delay);if(probe.moved){noMove=0;noNew=0;return;}}
  if(noNew>=36||noMove>=24){
@@ -167,7 +167,7 @@ async function tick(){if(busy)return;busy=true;try{
  else if(j.tabRole==='deep'&&j.stage==='deep')await deep(j);
  }catch(e){console.warn('FB Бур (задание сохранено):',String(e.message||e).slice(0,200));}finally{busy=false;}}
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='burPing'){reply({ready:true,version:'0.5.20-alpha',location:location.pathname,href:location.href,pageInstance:PAGE_INSTANCE,scrollY:Number(window.scrollY)||0,obstruction:F.obstruction(document,window),detailPost:Boolean(F.detailDialog(document,window))});return;}
+ if(msg?.type==='burPing'){reply({ready:true,version:'0.5.21-alpha',location:location.pathname,href:location.href,pageInstance:PAGE_INSTANCE,scrollY:Number(window.scrollY)||0,obstruction:F.obstruction(document,window),detailPost:Boolean(F.detailDialog(document,window))});return;}
  if(msg?.type==='burCheckpointGet'){const group=groupFromURL();if(!group||msg.group!==group){reply({post_id:null});return;}reply({post_id:localStorage.getItem('fb-bur-checkpoint-v3:'+group)||null});return;}
  if(msg?.type==='burCheckpointSet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ok:false});return;}const key='fb-bur-checkpoint-v3:'+group;if(msg.post_id)localStorage.setItem(key,String(msg.post_id));else localStorage.removeItem(key);reply({ok:true});return;}
  if(msg?.type==='burHistoryGet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ids:[]});return;}try{const raw=JSON.parse(localStorage.getItem('fb-bur-history-v1:'+group)||'[]');reply({ids:Array.isArray(raw)?raw.filter(x=>/^\d{8,30}$/.test(String(x))).slice(-50000):[]});}catch{reply({ids:[]});}return;}
