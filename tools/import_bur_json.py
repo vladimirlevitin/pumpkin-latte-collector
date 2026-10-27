@@ -10,6 +10,7 @@ Multiple files may be passed in one command.
 """
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import sys
@@ -18,7 +19,7 @@ import urllib.request
 from pathlib import Path
 
 DEFAULT_SUPABASE_URL = "https://ltznpjfnkpydautbsrej.supabase.co"
-RPC_PATH = "/rest/v1/rpc/bur_import_json"
+RPC_PATH = "/rest/v1/rpc/bur_import_json_safe"
 
 
 def validate_local(payload: dict, path: Path) -> None:
@@ -73,15 +74,26 @@ def import_file(path: Path, base_url: str, secret: str) -> dict:
     return result
 
 
+def get_secret() -> str:
+    secret = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
+    if not secret and sys.stdin.isatty():
+        secret = getpass.getpass("Supabase secret key (sb_secret_...): ").strip()
+    if not secret:
+        raise RuntimeError("SUPABASE_SECRET_KEY is not set")
+    if not secret.startswith("sb_secret_"):
+        raise RuntimeError("Use a Supabase secret key (sb_secret_...), never a publishable key")
+    return secret
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("Usage: python tools/import_bur_json.py <file1.json> [file2.json ...]", file=sys.stderr)
         return 2
 
-    secret = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
-    if not secret:
-        print("SUPABASE_SECRET_KEY is not set.", file=sys.stderr)
-        print("Use a Supabase secret key (sb_secret_...), never a publishable key.", file=sys.stderr)
+    try:
+        secret = get_secret()
+    except Exception as exc:
+        print(str(exc), file=sys.stderr)
         return 2
 
     base_url = os.environ.get("SUPABASE_URL", DEFAULT_SUPABASE_URL).strip()
@@ -95,7 +107,7 @@ def main() -> int:
                 f"OK  {path.name}: group={result.get('group')} "
                 f"posts={result.get('posts_seen')} new={result.get('posts_new')} "
                 f"updated={result.get('posts_updated')} comments={result.get('comments_seen')} "
-                f"last={result.get('last_collected_post_id')}"
+                f"last={result.get('last_collected_post_id')} reused={bool(result.get('reused'))}"
             )
         except Exception as exc:
             failed += 1
