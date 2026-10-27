@@ -119,18 +119,25 @@ function isRootFeedUrl(url,group){try{const u=new URL(url);return groupOf(url)==
 function feedId(j){return j?.feedTabId??j?.tabId??null;}
 function deepId(j){return j?.deepTabId??null;}
 function senderRole(j,sender){const id=sender?.tab?.id;if(!j||!id)return null;if(id===feedId(j)&&groupOf(sender.tab?.url)===j.group)return 'feed';if(id===deepId(j)&&groupOf(sender.tab?.url)===j.group)return 'deep';return null;}
-async function start({tabId,url,options={},replacePaused=false,startAfter=null}){const group=groupOf(url);if(!group||!/^\/groups\/[^/]+\/?$/.test(new URL(url).pathname))throw Error('Откройте ленту нужной Facebook-группы');await ensureContent(tabId,group);const existing=await getJob();if(existing&&existing.stage!=='done'&&!(replacePaused&&existing.paused))throw Error('Сбор уже существует: нажмите «Продолжить» либо поставьте его на паузу перед запуском другой группы.');
- const opts={maxPosts:Math.max(5,Math.min(5000,Math.trunc(Number(options.maxPosts)||DEFAULTS.maxPosts))),maxSteps:Math.max(30,Math.min(15000,Math.trunc(Number(options.maxSteps)||DEFAULTS.maxSteps)))};
+async function start({tabId,url,options={},replacePaused=false,startAfter=null}){
+ const group=groupOf(url);
+ if(!group||!isRootFeedUrl(url,group))throw Error('Откройте корень ленты нужной Facebook-группы');
+ await ensureContent(tabId,group);
+ const existing=await getJob();
+ if(existing&&existing.stage!=='done'&&!(replacePaused&&existing.paused))throw Error('Сбор уже существует: нажмите «Продолжить» либо поставьте его на паузу перед запуском другой группы.');
+ const opts={maxPosts:Math.max(5,Math.min(5000,Math.trunc(Number(options.maxPosts)||DEFAULTS.maxPosts))),maxSteps:Math.max(100,Math.min(50000,Math.trunc(Number(options.maxSteps)||DEFAULTS.maxSteps)))};
  const manual=String(startAfter||'').trim();if(manual&&!/^\d{8,30}$/.test(manual))throw Error('post_id должен состоять только из цифр');
  const checkpoint=manual?await setCheckpoint(group,manual,{manual:true,source:'popup',algorithm:CHECKPOINT_ALGORITHM}):await checkpointForStart(group,existing,tabId);
  if(manual)await setPageCheckpoint(tabId,group,manual);
  const history=await historyFor(group,tabId);
  await clearGroup(group);
- const hasCheckpoint=Boolean(checkpoint?.post_id);
- const j={id:now().toString(36),version:VERSION,checkpointAlgorithm:CHECKPOINT_ALGORITHM,group,tabId,stage:'discover',paused:false,startedAt:now(),lastSeen:now(),steps:0,discovered:0,deepDone:0,deepErrors:0,queue:[],discoveryOrder:[],checkpointSeenIds:[],historyRejected:0,historyCount:history.size,index:0,options:opts,
+ const hasCheckpoint=Boolean(checkpoint?.post_id),id=now().toString(36);
+ const j={id,sessionId:id,version:VERSION,checkpointAlgorithm:CHECKPOINT_ALGORITHM,group,tabId,feedTabId:tabId,deepTabId:null,exportTabId:null,
+  stage:'discover',paused:false,startedAt:now(),lastSeen:now(),batchStartedAt:now(),batchNumber:1,completedBatches:0,sessionPosts:0,sessionDeepDone:0,sessionDeepErrors:0,
+  steps:0,discovered:0,deepDone:0,deepErrors:0,queue:[],discoveryOrder:[],checkpointSeenIds:[],historyRejected:0,historyCount:history.size,index:0,options:opts,
   checkpointPostId:checkpoint?.post_id||null,checkpointPending:hasCheckpoint,checkpointFound:false,checkpointScanSteps:0,checkpointSource:manual?'manual':(checkpoint?.recovered_after_reinstall?'facebook_localstorage':'stored'),
-  rewindPending:hasCheckpoint,rewindVerified:!hasCheckpoint,rewindDiagnostics:null,
-  note:hasCheckpoint?'Сначала возвращаю Facebook-ленту в подтверждённый верх. До checkpoint '+checkpoint.post_id+' ничего не сохраняю.':'Разведка: первый пакет, сбор ВСЕХ доступных публикаций без оценки содержания'};
+  rewindPending:hasCheckpoint,rewindVerified:!hasCheckpoint,rewindDiagnostics:null,liveBoundaryPending:false,liveBoundaryPostId:null,liveBoundaryScanSteps:0,
+  note:hasCheckpoint?'Аварийный старт: возвращаю ленту наверх и ищу checkpoint '+checkpoint.post_id+'. После него сессия будет идти непрерывно.':'Непрерывная сессия: вкладка ленты остаётся на месте, deep выполняется отдельно.'};
  await setJob(j);
  if(hasCheckpoint){await chrome.tabs.reload(tabId);return j;}
  await notifyTab(tabId);return j;
