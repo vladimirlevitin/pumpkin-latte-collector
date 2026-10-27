@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:sql": "node test-receipt.mjs",
+    "test": "node test-receipt.mjs && node test-index.mjs && node test-search.mjs && node test-api.mjs && node test-e2e.mjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.12",
+    "@electric-sql/pglite-pgvector": "0.0.13"
+  }
+}
