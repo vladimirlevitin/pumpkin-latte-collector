@@ -1,4 +1,4 @@
-/* FB Bur 0.5.18-alpha: feed-order observations + structured comment threads. */
+/* FB Bur 0.5.19-alpha: feed-order observations + structured comment threads. */
 (() => {
 'use strict';
 if(window.__burCollector052)return;window.__burCollector052=true;
@@ -91,7 +91,8 @@ async function discover(job){
  if(movement.blocked){await send('obstructed',{stage:'discover',diagnostics:movement.blocked});return;}
  await delay(1400); // Facebook often loads the next feed slice asynchronously
  noMove=movement.moved?0:noMove+1;
- if(noNew>=14||noMove>=6){
+ if(noMove===8||noMove===16){await delay(noMove===8?3000:7000);const probe=await F.advance(document,window,delay);if(probe.moved){noMove=0;noNew=0;return;}}
+ if(noNew>=36||noMove>=24){
    await send('endDiscovery',{reason:`Недостаточно данных: без новых ${noNew}, без прокрутки ${noMove}`,
      diagnostics:{noNew,noMove,scroll:movement.tries,visibleCards:observations.filter(x=>x.visible).length,totalCards:observations.length,href:location.pathname}});
  }
@@ -160,12 +161,13 @@ async function deep(job){
  }catch(e){try{await send('deepError',{id:expected,error:String(e.message||e)});}catch{}}
 }
 async function tick(){if(busy)return;busy=true;try{
- const j=await send('status');if(!j||j.paused||j.group!==groupFromURL()||!['discover','deep'].includes(j.stage))return;
- const cycle=j.id+'|'+(j.resumeCount||0);if(lastJobId!==cycle){noNew=0;noMove=0;lastJobId=cycle;}
- if(j.stage==='discover')await discover(j);else await deep(j);
+ const j=await send('status');if(!j||j.paused||j.group!==groupFromURL())return;
+ const cycle=j.id+'|'+(j.resumeCount||0)+'|'+(j.batchNumber||1);if(lastJobId!==cycle){noNew=0;noMove=0;lastJobId=cycle;}
+ if(j.tabRole==='feed'&&j.stage==='discover')await discover(j);
+ else if(j.tabRole==='deep'&&j.stage==='deep')await deep(j);
  }catch(e){console.warn('FB Бур (задание сохранено):',String(e.message||e).slice(0,200));}finally{busy=false;}}
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='burPing'){reply({ready:true,version:'0.5.18-alpha',location:location.pathname,obstruction:F.obstruction(document,window),detailPost:Boolean(F.detailDialog(document,window))});return;}
+ if(msg?.type==='burPing'){reply({ready:true,version:'0.5.19-alpha',location:location.pathname,obstruction:F.obstruction(document,window),detailPost:Boolean(F.detailDialog(document,window))});return;}
  if(msg?.type==='burCheckpointGet'){const group=groupFromURL();if(!group||msg.group!==group){reply({post_id:null});return;}reply({post_id:localStorage.getItem('fb-bur-checkpoint-v3:'+group)||null});return;}
  if(msg?.type==='burCheckpointSet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ok:false});return;}const key='fb-bur-checkpoint-v3:'+group;if(msg.post_id)localStorage.setItem(key,String(msg.post_id));else localStorage.removeItem(key);reply({ok:true});return;}
  if(msg?.type==='burHistoryGet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ids:[]});return;}try{const raw=JSON.parse(localStorage.getItem('fb-bur-history-v1:'+group)||'[]');reply({ids:Array.isArray(raw)?raw.filter(x=>/^\d{8,30}$/.test(String(x))).slice(-50000):[]});}catch{reply({ids:[]});}return;}
