@@ -20,7 +20,7 @@ with tempfile.TemporaryDirectory() as tmp, sync_playwright() as p:
   page.goto(extension_url+'/export.html?manual=1')
  data=json.loads(Path(event.value.path()).read_text(encoding='utf-8'))
  assert data['posts']==seeded['rows']
- assert data['collector_version']=='0.5.20-alpha'
+ assert data['collector_version']=='0.5.21-alpha'
  assert data['job_summary']['session_id']=='saved-session'
  assert data['job_summary']['batch_number']==3
  assert data['job_summary']['id']=='saved-session-b0003'
