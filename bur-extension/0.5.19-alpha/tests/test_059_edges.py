@@ -8,7 +8,7 @@ with sync_playwright() as p:
  page=b.new_page(viewport={'width':1200,'height':800})
  page.route('**/*',lambda route: route.fulfill(status=200,content_type='text/html; charset=utf-8',body='<html><body></body></html>'))
  page.goto(URL)
- job={'id':'edge0510','stage':'deep','group':'backpackIL','paused':False,'queue':[ID],'index':0,'deepPhase':'READY'}
+ job={'id':'edge0510','stage':'deep','tabRole':'deep','group':'backpackIL','paused':False,'queue':[ID],'index':0,'deepPhase':'READY'}
  page.evaluate('''(job)=>{window.testJob=job;window.snapshots=[];window.obstructions=[];
  window.chrome={runtime:{sendMessage:async(msg)=>{
    if(msg.type==='status')return {ok:true,result:window.testJob};
