@@ -96,6 +96,32 @@ async function advance(doc,view,wait){
  }
  return {moved:false,tries};
 }
+async function rewindToTop(doc,view,wait){
+ const rounds=[];let stable=0;
+ try{if(view.history&&'scrollRestoration' in view.history)view.history.scrollRestoration='manual';}catch{}
+ for(let cycle=0;cycle<18;cycle++){
+  const candidates=getCandidates(doc,view),before=[];
+  for(const el of candidates)before.push(position(el,doc,view));
+  try{view.scrollTo?.(0,0);}catch{}
+  const root=doc.scrollingElement||doc.documentElement;
+  try{if(root)root.scrollTop=0;}catch{}
+  try{if(doc.documentElement)doc.documentElement.scrollTop=0;}catch{}
+  try{if(doc.body)doc.body.scrollTop=0;}catch{}
+  for(const el of candidates){
+   if(el===root||el===doc.documentElement||el===doc.body)continue;
+   try{el.scrollTop=0;}catch{}
+  }
+  await wait(cycle<5?320:180);
+  const afterCandidates=getCandidates(doc,view),after=afterCandidates.map(el=>position(el,doc,view));
+  const docPos=Math.max(0,Number(view.scrollY)||0,Number(root?.scrollTop)||0,Number(doc.documentElement?.scrollTop)||0,Number(doc.body?.scrollTop)||0);
+  const maxPos=Math.max(docPos,...after,0);
+  const atTop=maxPos<=4;
+  stable=atTop?stable+1:0;
+  rounds.push({cycle:cycle+1,before_max:Math.max(...before,0),after_max:maxPos,containers:afterCandidates.length,at_top:atTop});
+  if(stable>=3)return {ok:true,stable_rounds:stable,cycles:cycle+1,position:maxPos,rounds:rounds.slice(-6)};
+ }
+ return {ok:false,stable_rounds:stable,cycles:18,position:rounds.at(-1)?.after_max??null,rounds:rounds.slice(-8)};
+}
 // A Facebook post permalink often renders the SELECTED post inside a modal.
 // This is an intended detail view, unlike a photo gallery during feed discovery.
 function selectedPostIdentity(doc,view){
@@ -176,5 +202,5 @@ async function advanceDetail(doc,view,wait){
  const modal=detailDialog(doc,view);const blocked=deepObstruction(doc,view,modal);if(blocked)return {moved:false,blocked,tries:[]};if(!modal)return {moved:false,blocked:obstruction(doc,view),tries:[]};
  return advanceDialog(modal,view,wait);
 }
-return {getCandidates,position,move,advance,obstruction,deepObstruction,visibleDialogs,selectedPostIdentity,detailDialog,commentThreadDialog,advanceDialog,advanceDetail};
+return {getCandidates,position,move,advance,rewindToTop,obstruction,deepObstruction,visibleDialogs,selectedPostIdentity,detailDialog,commentThreadDialog,advanceDialog,advanceDetail};
 });
