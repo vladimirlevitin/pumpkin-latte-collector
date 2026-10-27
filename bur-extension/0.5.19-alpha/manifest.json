@@ -2,16 +2,17 @@
   "manifest_version": 3,
   "name": "FB Бур — универсальный коллектор (alpha)",
   "short_name": "FB Бур",
-  "version": "0.5.18",
-  "version_name": "0.5.18-alpha",
-  "description": "FB-коллектор: подтверждает верх ленты, до checkpoint ничего не сохраняет и блокирует уже виденные post_id.",
+  "version": "0.5.19",
+  "version_name": "0.5.19-alpha",
+  "description": "Непрерывный FB-коллектор: feed-вкладка сохраняет позицию, deep работает отдельно, JSON-пакеты продолжаются автоматически.",
   "minimum_chrome_version": "116",
   "permissions": [
     "storage",
     "tabs",
     "scripting",
     "alarms",
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "downloads"
   ],
   "host_permissions": [
     "https://www.facebook.com/*",
