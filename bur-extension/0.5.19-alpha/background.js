@@ -215,24 +215,23 @@ async function resumeFeedAtLiveBoundary(j){
  await notifyTab(feedId(j));return j;
 }
 async function obstructed(msg,sender){
- const j=await getJob();if(!j||j.paused||!['discover','deep'].includes(j.stage)||sender.tab?.id!==j.tabId)return {ignored:true};
- if(j.stage==='deep'){
-  const id=j.queue[j.index];
-  return failDeep({id,error:'Интерфейс Facebook перекрыл публикацию: '+String(msg.diagnostics?.phase||msg.diagnostics?.kind||'dialog'),details:msg.diagnostics||null},sender);
+ const j=await getJob();if(!j||j.paused)return {ignored:true};const role=senderRole(j,sender);
+ if(role==='deep'&&j.stage==='deep'){
+  const id=j.queue[j.index];return failDeep({id,error:'Интерфейс Facebook перекрыл публикацию: '+String(msg.diagnostics?.phase||msg.diagnostics?.kind||'dialog'),details:msg.diagnostics||null},sender);
  }
+ if(role!=='feed'||j.stage!=='discover')return {ignored:true};
  j.obstructionRecoveries=(j.obstructionRecoveries||0)+1;
- if(j.obstructionRecoveries>5)return stall(j,'Facebook более 5 раз подряд перекрыл ленту; вероятна проверка входа/доступа',msg.diagnostics,'discover');
- j.note=`Автовосстановление ленты после окна Facebook (${j.obstructionRecoveries}/5)`;j.lastSeen=now();await setJob(j);
- await chrome.tabs.update(j.tabId,{url:'https://www.facebook.com/groups/'+encodeURIComponent(j.group)+'/'});
+ if(j.obstructionRecoveries>5)return recoverFeedFromCheckpoint(j,'Facebook более 5 раз подряд перекрыл ленту',msg.diagnostics);
+ j.note='Автовосстановление ленты после окна Facebook ('+j.obstructionRecoveries+'/5)';j.lastSeen=now();j.resumeCount=(j.resumeCount||0)+1;await setJob(j);await notifyTab(feedId(j));
  return {recovered:true};
 }
 async function rewindResult(msg,sender){
- const j=await getJob();if(!j||j.stage!=='discover'||j.paused||sender.tab?.id!==j.tabId||groupOf(sender.tab?.url)!==j.group)return {ignored:true};
+ const j=await getJob();if(!j||j.stage!=='discover'||j.paused||senderRole(j,sender)!=='feed')return {ignored:true};
  if(!j.rewindPending)return {ignored:true,alreadyDone:true};
  const r=msg.result||{};j.lastSeen=now();j.rewindDiagnostics=r;
- if(!r.ok){return stall(j,'Не удалось надёжно вернуть Facebook-ленту к самому верху; checkpoint не ищется и данные не сохраняются',{rewind:r},'discover');}
- j.rewindPending=false;j.rewindVerified=true;j.rewindDoneAt=new Date().toISOString();j.steps=0;j.checkpointScanSteps=0;j.checkpointSeenIds=[];j.note='Верх ленты подтверждён. Ищу checkpoint '+j.checkpointPostId+'. До него ничего не сохраняю.';
- await setJob(j);await notifyTab(j.tabId);return {ok:true,rewindVerified:true,checkpoint:j.checkpointPostId};
+ if(!r.ok)return stall(j,'Не удалось надёжно вернуть Facebook-ленту к самому верху; checkpoint не ищется',{rewind:r},'discover');
+ j.rewindPending=false;j.rewindVerified=true;j.rewindDoneAt=new Date().toISOString();j.steps=0;j.checkpointScanSteps=0;j.checkpointSeenIds=[];j.note='Верх подтверждён. Ищу аварийный checkpoint '+j.checkpointPostId+'.';
+ await setJob(j);await notifyTab(feedId(j));return {ok:true,rewindVerified:true,checkpoint:j.checkpointPostId};
 }
 async function discovered(msg,sender){
  const j=await getJob();if(!j||j.stage!=='discover'||j.paused||sender.tab?.id!==j.tabId||groupOf(sender.tab?.url)!==j.group)return {ignored:true};
