@@ -274,7 +274,11 @@ async function rewindResult(msg,sender){
  if(!j.rewindPending)return {ignored:true,alreadyDone:true};
  const r=msg.result||{};j.lastSeen=now();j.rewindDiagnostics=r;
  if(!r.ok)return stall(j,'Не удалось надёжно вернуть Facebook-ленту к самому верху; checkpoint не ищется',{rewind:r},'discover');
- j.rewindPending=false;j.rewindVerified=true;j.rewindDoneAt=new Date().toISOString();j.steps=0;j.checkpointScanSteps=0;j.checkpointSeenIds=[];j.note='Верх подтверждён. Ищу аварийный checkpoint '+j.checkpointPostId+'.';
+ j.rewindPending=false;j.rewindVerified=true;j.rewindDoneAt=new Date().toISOString();j.steps=0;j.checkpointScanSteps=0;j.checkpointSeenIds=[];
+ if(j.checkpointBypassPending){
+  j.checkpointBypassPending=false;j.checkpointPending=false;j.checkpointUnavailable=true;j.checkpointFound=false;
+  j.note='Checkpoint '+j.checkpointPostId+' не найден за 36 проходов. Перешёл к сбору от верха ленты с сохранённой историей ID; возможный пробел отмечен. Старый checkpoint сохранён до первого успешного пакета.';
+ }else j.note='Верх подтверждён. Ищу аварийный checkpoint '+j.checkpointPostId+'.';
  await setJob(j);await notifyTab(feedId(j));return {ok:true,rewindVerified:true,checkpoint:j.checkpointPostId};
 }
 async function discovered(msg,sender){
@@ -303,6 +307,11 @@ async function discovered(msg,sender){
   if(!cp){
    rememberCheckpointSeen(j,observations.filter(o=>Number.isFinite(o.top)&&o.top<vh).map(o=>o.post.post_id));
    j.note='Аварийное восстановление: ищу checkpoint '+j.checkpointPostId+'; проходы '+j.checkpointScanSteps+'. До него ничего не сохранено.';
+   if(j.checkpointScanSteps>=36){
+    j.checkpointBypassPending=true;j.rewindPending=true;j.rewindVerified=false;
+    j.note='Checkpoint недоступен после 36 проходов: безопасно возвращаюсь наверх; историю ID не сбрасываю.';
+    await setJob(j);await chrome.tabs.reload(feedId(j));return {added:0,updated:0,stage:j.stage,discovered:0,seekingCheckpoint:true,rewinding:true};
+   }
    if(j.steps>=j.options.maxSteps||msg.exhausted)return stall(j,'Checkpoint '+j.checkpointPostId+' не найден после полного лимита проходов',msg.diagnostics,'discover');
    await setJob(j);return {added:0,updated:0,stage:j.stage,discovered:j.discovered,seekingCheckpoint:true,checkpoint:j.checkpointPostId,seenBeforeCheckpoint:j.checkpointSeenIds.length};
   }
