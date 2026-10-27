@@ -16,7 +16,7 @@ body{{height:2800px}}#c2{{display:none}}
 with sync_playwright() as p:
  browser=p.chromium.launch(headless=True,args=['--no-sandbox']);ctx=browser.new_context()
  page=ctx.new_page();page.set_content(html)
- job={'id':'test-e2e','stage':'deep','group':'backpackIL','paused':False,'queue':[ID],'index':0}
+ job={'id':'test-e2e','stage':'deep','tabRole':'deep','group':'backpackIL','paused':False,'queue':[ID],'index':0}
  page.evaluate('''(job)=>{window.testJob=job;window.snapshots=[];
  window.chrome={runtime:{sendMessage:async(msg)=>{
  if(msg.type==='status')return {ok:true,result:window.testJob};
