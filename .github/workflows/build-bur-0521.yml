@@ -34,6 +34,7 @@ jobs:
           assert manifest['version']=='0.5.21'
           assert "if(msg.exhausted)return stall(j,'Facebook" in bg
           assert "j.feedStallRecoveries=0;j.steps=0;" in bg
+          assert "version:'0.5.21-alpha'" in content
           assert 'if(!seeking){const nodes=' in content
           assert 'job.checkpointScanSteps%8===0?1400:250' in content
           assert 'checkpointBypassPending' not in bg
