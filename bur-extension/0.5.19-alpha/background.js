@@ -234,50 +234,59 @@ async function rewindResult(msg,sender){
  await setJob(j);await notifyTab(feedId(j));return {ok:true,rewindVerified:true,checkpoint:j.checkpointPostId};
 }
 async function discovered(msg,sender){
- const j=await getJob();if(!j||j.stage!=='discover'||j.paused||sender.tab?.id!==j.tabId||groupOf(sender.tab?.url)!==j.group)return {ignored:true};
+ const j=await getJob();if(!j||j.stage!=='discover'||j.paused||senderRole(j,sender)!=='feed')return {ignored:true};
  if(j.rewindPending)return {ignored:true,rewinding:true,stage:j.stage,discovered:j.discovered};
  const observations=observationsFrom(msg),vh=Math.max(1,Number(msg.viewportHeight)||observations[0]?.viewportHeight||800);
- j.steps+=Math.min(1,Number(msg.step)||0);j.lastSeen=now();
- let candidateRows=[];
- if(j.checkpointPending){
+ j.steps+=Math.min(1,Number(msg.step)||0);j.lastSeen=now();let candidateRows=[];
+ if(j.liveBoundaryPending){
+  j.liveBoundaryScanSteps=(j.liveBoundaryScanSteps||0)+1;
+  const boundaryId=String(j.liveBoundaryPostId||j.checkpointPostId||'');
+  const cp=observations.find(o=>String(o.post.post_id)===boundaryId&&Number.isFinite(o.top)&&o.top<vh);
+  if(!cp){
+   const historical=await historyFor(j.group,feedId(j));
+   const reached=observations.filter(o=>Number.isFinite(o.top)&&o.top<vh).map(o=>String(o.post.post_id));
+   const unknown=reached.filter(id=>id&&!historical.has(id));
+   if(unknown.length)return recoverFeedFromCheckpoint(j,'Живая граница исчезла, а впереди появились неизвестные ID — возможен пропуск',{boundaryId,unknown:unknown.slice(0,10)});
+   if(j.liveBoundaryScanSteps>=24||msg.exhausted)return recoverFeedFromCheckpoint(j,'Не удалось подтвердить живую границу после deep-прохода',{boundaryId,steps:j.liveBoundaryScanSteps});
+   j.note='Пакет '+j.batchNumber+': подтверждаю живую границу '+boundaryId+'; до неё ничего не сохраняю.';
+   await setJob(j);return {added:0,updated:0,stage:j.stage,discovered:0,seekingLiveBoundary:true,boundary:boundaryId};
+  }
+  const top=cp.top;j.liveBoundaryPending=false;j.liveBoundaryFoundAt=new Date().toISOString();j.liveBoundaryFoundTop=top;j.feedStallRecoveries=0;
+  candidateRows=observations.filter(o=>Number.isFinite(o.top)&&Number.isFinite(o.bottom)&&o.top>top+4&&o.bottom>0).map(o=>o.post);
+ }else if(j.checkpointPending){
   j.checkpointScanSteps=(j.checkpointScanSteps||0)+1;
-  // "Reached" means the checkpoint has physically entered/passed the viewport while
-  // scrolling downward. A checkpoint merely prefetched far below the viewport is NOT reached.
   const cp=observations.find(o=>String(o.post.post_id)===String(j.checkpointPostId)&&Number.isFinite(o.top)&&o.top<vh);
   if(!cp){
-   // Remember only cards that have actually reached the viewport. DOM may pre-render
-   // future cards below it; blocking those would create a gap after the checkpoint.
    rememberCheckpointSeen(j,observations.filter(o=>Number.isFinite(o.top)&&o.top<vh).map(o=>o.post.post_id));
-   j.note=`Ищу контрольную точку ${j.checkpointPostId}; проходы ${j.checkpointScanSteps}. До неё ничего не сохранено.`;
-   if(j.steps>=j.options.maxSteps||msg.exhausted)await stall(j,'Контрольная точка '+j.checkpointPostId+' не найдена; сбор остановлен, чтобы не начать не с того места',msg.diagnostics,'discover');
-   else await setJob(j);
-   return {added:0,updated:0,stage:j.stage,discovered:j.discovered,seekingCheckpoint:true,checkpoint:j.checkpointPostId,seenBeforeCheckpoint:j.checkpointSeenIds.length};
+   j.note='Аварийное восстановление: ищу checkpoint '+j.checkpointPostId+'; проходы '+j.checkpointScanSteps+'. До него ничего не сохранено.';
+   if(j.steps>=j.options.maxSteps||msg.exhausted)return stall(j,'Checkpoint '+j.checkpointPostId+' не найден после полного лимита проходов',msg.diagnostics,'discover');
+   await setJob(j);return {added:0,updated:0,stage:j.stage,discovered:j.discovered,seekingCheckpoint:true,checkpoint:j.checkpointPostId,seenBeforeCheckpoint:j.checkpointSeenIds.length};
   }
-  const cpTop=cp.top;
-  // This is the key 0.5.17 rule: geometry, not DOM-array position, defines "after".
-  // Everything at/above the checkpoint is a forbidden old area; only cards physically
-  // BELOW it can enter the new package.
-  rememberCheckpointSeen(j,observations.filter(o=>Number.isFinite(o.top)&&o.top<=cpTop+4).map(o=>o.post.post_id));
-  rememberCheckpointSeen(j,[j.checkpointPostId]);
-  j.checkpointPending=false;j.checkpointFound=true;j.checkpointFoundAt=new Date().toISOString();j.checkpointFoundTop=cpTop;
-  const historical=await mergeHistory(j.group,j.checkpointSeenIds,j.tabId);j.historyCount=historical.size;
-  candidateRows=observations.filter(o=>Number.isFinite(o.top)&&Number.isFinite(o.bottom)&&o.top>cpTop+4&&o.bottom>0).map(o=>o.post);
- }else if(j.checkpointFound){
-  // Once the boundary is crossed, ignore cards wholly above the viewport and every id
-  // observed before/at the boundary. This survives Facebook keeping old DOM nodes around.
-  candidateRows=observations.filter(o=>Number.isFinite(o.top)&&Number.isFinite(o.bottom)&&o.bottom>0).map(o=>o.post);
+  const top=cp.top;rememberCheckpointSeen(j,observations.filter(o=>Number.isFinite(o.top)&&o.top<=top+4).map(o=>o.post.post_id));rememberCheckpointSeen(j,[j.checkpointPostId]);
+  j.checkpointPending=false;j.checkpointFound=true;j.checkpointFoundAt=new Date().toISOString();j.checkpointFoundTop=top;j.feedStallRecoveries=0;
+  const historical=await mergeHistory(j.group,j.checkpointSeenIds,feedId(j));j.historyCount=historical.size;
+  candidateRows=observations.filter(o=>Number.isFinite(o.top)&&Number.isFinite(o.bottom)&&o.top>top+4&&o.bottom>0).map(o=>o.post);
  }else{
-  // First-ever package: there is no boundary to seek.
-  candidateRows=observations.map(o=>o.post);
+  candidateRows=(j.checkpointFound||j.completedBatches>0)
+   ? observations.filter(o=>Number.isFinite(o.bottom)&&o.bottom>0).map(o=>o.post)
+   : observations.map(o=>o.post);
  }
- const r=await admitRows(j,candidateRows);if(r.added)j.obstructionRecoveries=0;
- j.note=(j.checkpointFound?`Продолжение строго после ${j.checkpointPostId}. `:'')+`Разведка: ${j.discovered} из ${j.options.maxPosts}, проходы ${j.steps}`;
- if(j.discovered>=j.options.maxPosts)await beginDeep(j,'достигнут предел публикаций');
- else if(j.steps>=j.options.maxSteps||msg.exhausted)await stall(j,j.steps>=j.options.maxSteps?'Лимит проходов ленты':'Лента перестала продвигаться',msg.diagnostics,'discover');
+ const r=await admitRows(j,candidateRows);if(r.added){j.obstructionRecoveries=0;j.feedStallRecoveries=0;}
+ j.note='Пакет '+j.batchNumber+': разведка '+j.discovered+'/'+j.options.maxPosts+'; завершено пакетов '+j.completedBatches+'; всего принято '+j.sessionPosts+'.';
+ if(j.discovered>=j.options.maxPosts)await beginDeep(j,'достигнут размер пакета');
+ else if(j.steps>=j.options.maxSteps)await recoverFeedFromCheckpoint(j,'Достигнут лимит проходов текущей ленты',{steps:j.steps});
  else await setJob(j);
- return {...r,stage:j.stage,discovered:j.discovered,seekingCheckpoint:false,checkpointFound:j.checkpointFound,checkpoint:j.checkpointPostId,discoveryTail:j.discoveryOrder.slice(-3)};
+ const latest=await getJob();return {...r,stage:latest.stage,discovered:latest.discovered,seekingCheckpoint:false,checkpointFound:latest.checkpointFound,checkpoint:latest.checkpointPostId,discoveryTail:latest.discoveryOrder.slice(-3)};
 }
-async function endDiscovery(msg,sender){const j=await getJob();if(j&&sender.tab?.id===j.tabId&&j.stage==='discover'&&!j.paused)await stall(j,j.checkpointPending?'Контрольная точка '+j.checkpointPostId+' не найдена; сбор остановлен, чтобы не пропустить публикации':(msg.reason||'Нет новых карточек'),msg.diagnostics,'discover');return getJob();}
+async function endDiscovery(msg,sender){
+ const j=await getJob();if(!j||j.stage!=='discover'||j.paused||senderRole(j,sender)!=='feed')return j;
+ j.feedStallRecoveries=(j.feedStallRecoveries||0)+1;
+ if(j.feedStallRecoveries<=8){
+  j.resumeCount=(j.resumeCount||0)+1;j.lastSeen=now();j.note='Лента временно не двигается. Автоповтор '+j.feedStallRecoveries+'/8 без потери позиции.';await setJob(j);await notifyTab(feedId(j));return j;
+ }
+ if(j.lastCollectedPostId||j.checkpointPostId)return recoverFeedFromCheckpoint(j,'Лента не продвигается после 8 автоповторов',msg.diagnostics);
+ return stall(j,msg.reason||'Лента не продвигается',msg.diagnostics,'discover');
+}
 async function navigateCurrent(j){if(j.paused||j.stage!=='deep')return;const id=j.queue[j.index];if(!id){await finish(j);return;}const url=C.canonicalUrl(j.group,id);
  try{const tab=await chrome.tabs.get(j.tabId);if(!tab)throw Error('Вкладка закрыта');if(j.redirectPostId!==id){j.redirectPostId=id;j.redirectRecoveries=0;}const already=postIdOf(tab.url,j.group)===id;j.navStartedAt=now();j.currentId=id;j.deepPhase=already?'READY':'NAVIGATING';j.note=`Сейчас: ${j.index+1}/${j.queue.length}`;await setJob(j);if(!already)await chrome.tabs.update(j.tabId,{url});else {try{await ensureContent(j.tabId,j.group);}catch{}await notifyTab(j.tabId);}}
  catch(e){j.paused=true;j.stage='stalled';j.stall={at:new Date().toISOString(),reason:'collector_tab_missing',resumeStage:'deep',details:safeError(e)};j.note='Служебная вкладка закрыта. Задание приостановлено: исходная вкладка закрыта. Перенос в другую вкладку запрещён.';await setJob(j);}}
