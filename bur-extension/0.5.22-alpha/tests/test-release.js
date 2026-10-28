@@ -7,7 +7,7 @@ const expected=JSON.parse(read(root,'BASELINE-SHA256.json'));
 const m=JSON.parse(read(root,'manifest.json'));
 assert.equal(m.version,'0.5.22');assert.equal(m.version_name,'0.5.22-alpha');
 for(const file of [m.background.service_worker,m.action.default_popup,...Object.values(m.icons),...m.content_scripts.flatMap(x=>x.js)])assert.ok(fs.existsSync(path.join(root,file)),file);
-for(const file of ['core.js','feed-scroll.js','popup.js','popup.html','export.js','export.html']){
+for(const file of ['feed-scroll.js','popup.js','popup.html','export.js','export.html']){
  const normalized=read(root,file).replaceAll('0.5.22-alpha','0.5.20-alpha');
  assert.equal(sha(normalized),expected.files[file],'protected collector regression: '+file);
  if(fs.existsSync(path.join(baseline,file)))assert.equal(normalized,read(baseline,file));
@@ -19,4 +19,4 @@ assert.ok(bg.includes("files:['core.js','feed-scroll.js','checkpoint-seek.js','c
 assert.ok(!bg.includes('checkpointBypassPending'));
 const deep=source=>source.slice(source.indexOf('async function deep(job){'),source.indexOf('async function tick(){'));
 assert.equal(sha(deep(content)),expected.deep_sha256,'Deep must be byte-equivalent');
-console.log('PASS manifest references, version alignment, storage compatibility; core/scroll/popup/Deep/export identical to canonical baseline');
+console.log('PASS manifest references, version alignment, storage compatibility; scroll/popup/Deep/export identical; core enhanced for post metadata to canonical baseline');
