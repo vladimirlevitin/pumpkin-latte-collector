@@ -103,6 +103,9 @@
     const merged={...old,...incoming,post_text:chosen.text,post_text_quality:chosen.quality,
       visible_card_text:(incoming.visible_card_text||'').length>(old.visible_card_text||'').length?incoming.visible_card_text:old.visible_card_text,
       text_variants:variants.slice(-20), comments,comments_status:comments.length?'visible_partial_unverified':'none_extracted_unknown',
+      author:incoming.author||old.author||null,author_url:incoming.author_url||old.author_url||null,
+      published_at:incoming.published_at||old.published_at||null,
+      media:[...new Map([...(old.media||[]),...(incoming.media||[])].filter(x=>x&&x.url).map(x=>[x.url,x])).values()],
       first_seen:old.first_seen||incoming.first_seen,snapshot_at:incoming.snapshot_at,
       id_quality:old.post_id||incoming.post_id?'permalink':'text_fingerprint_unverified',
       text_flags:textQuality(chosen.text)};
@@ -298,6 +301,30 @@
     }
     return clicks;
   }
+  // Record only explicit Facebook DOM evidence. Unknown fields remain null.
+  function extractPostMetadata(node) {
+    const root=node.querySelector('[data-ad-rendering-role="profile_name"],h2,h3,h4')||node;
+    const links=[...root.querySelectorAll('a[href]')];
+    const profile=links.find(a=>/facebook\.com\/(?:profile\.php|people\/|[a-z0-9._-]+(?:\/|\?|$))/i.test(a.href||'')&&!/\/groups\/|\/posts\/|\/permalink\//.test(a.href||''));
+    const author=profile?clean(profile.innerText||profile.textContent||''):null;
+    const validAuthor=author&&author.length>1&&author.length<180&&!/^(?:Like|Comment|Share|Нравится|Поделиться)$/i.test(author);
+    const time=node.querySelector('time[datetime],abbr[data-utime]');
+    let published_at=null;
+    if(time){const raw=time.getAttribute('datetime')||(time.getAttribute('data-utime')?new Date(Number(time.getAttribute('data-utime'))*1000).toISOString():null);if(raw&&!Number.isNaN(Date.parse(raw)))published_at=new Date(raw).toISOString();}
+    // Record direct image evidence only; exclude avatar, emoji, and tiny UI icons.
+    const media=[];
+    for(const img of node.querySelectorAll('img[src]')){
+      const src=img.currentSrc||img.src||'';
+      const w=img.naturalWidth||Number(img.getAttribute('width'))||0;
+      const h=img.naturalHeight||Number(img.getAttribute('height'))||0;
+      if(!/^https?:\/\//i.test(src)||/emoji|profile_pic|scontent.*(?:_s\.|\/v\/t1\.0-1\/)/i.test(src))continue;
+      if((w&&w<180)||(h&&h<150))continue;
+      if(img.closest('a[aria-label*="profile"],[role="button"][aria-label*="profile"]'))continue;
+      const u=img.closest('a[href]')?.href||null;
+      if(!media.some(m=>m.url===src))media.push({kind:'image',url:src,alt:img.alt||null,source_url:u});
+    }
+    return {author:validAuthor?author:null,author_url:validAuthor?profile.href:null,published_at,media};
+  }
   function extractCard(node,group,loc) {
     const raw=cut(node.innerText||node.textContent||'');
     if(raw.length<35)return null;
@@ -324,13 +351,10 @@
     }
     const main=body||raw;
     const comments=extractVisibleComments(node);
-    const t=node.querySelector('time[datetime],abbr[data-utime],a[aria-label] time[datetime]');
-    let published_at=null;
-    if(t){const rawTime=t.getAttribute('datetime')||(t.getAttribute('data-utime')?new Date(Number(t.getAttribute('data-utime'))*1000).toISOString():null);
-      if(rawTime&&!Number.isNaN(Date.parse(rawTime)))published_at=new Date(rawTime).toISOString();}
+    const {author,author_url,published_at,media}=extractPostMetadata(node);
     return normalizePost({group,post_id:link.id,permalink:link.url,post_text:main,
       post_text_quality:body?'body_selector':'whole_card_unstructured',visible_card_text:raw,
-      comments,published_at,source_page:loc||'',snapshot_at:new Date().toISOString(),collector,
+      comments,author,author_url,published_at,media,source_page:loc||'',snapshot_at:new Date().toISOString(),collector,
       warning:comments.length?'Only already visible comments; thread completeness unknown.':'No separately extracted visible comments; completeness unknown.'},group);
   }
   return {collector,clean,hash,idFromPermalink,canonicalUrl,textQuality,truncated,
