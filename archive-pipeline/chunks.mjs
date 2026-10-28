@@ -18,7 +18,7 @@ export function prepareUnits(batch){
   const sources=[{kind:'post',key:'body',text:post.post_text||'',commentId:null}];
   for(const c of post.comments||[]){
    const key=String(c.id||c.comment_id||hash(String(c.text||'')+'|'+String(c.author||'')));
-   sources.push({kind:'comment',key,text:c.text||'',commentId:c.id||c.comment_id||null});
+   sources.push({kind:'comment',key,text:c.text||'',commentId:c.id||c.comment_id||null,parentId:c.parent_id||null});
   }
   for(const source of sources)for(const part of chunks(source.text)){
    const key=[group,post.post_id,source.kind,source.key,part.start].join('|');
@@ -26,7 +26,7 @@ export function prepareUnits(batch){
     unit_type:source.kind,text:part.text,source_hash:hash(key+'|'+part.text),
     metadata:{bur_chunk_key:key,bur_chunk_offset:part.start,
      capture_status:post.deep?.status||'unknown',completeness:post.deep?.completeness||'unknown',
-     parent_comment_id:source.kind==='comment'?(post.comments.find(c=>String(c.id||c.comment_id||hash(String(c.text||'')+'|'+String(c.author||'')))===source.key)?.parent_id||null):null}});
+     parent_comment_id:source.parentId||null}});
   }
  }
  return units;

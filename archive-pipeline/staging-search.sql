@@ -10,6 +10,13 @@ create table if not exists bur_access.group_members(
 );
 alter table bur_access.group_members enable row level security;
 grant select,insert,delete on bur_access.group_members to service_role;
+create or replace function public.bur_archive_authorized(p_user_id uuid,p_group text)
+returns boolean language sql stable security invoker set search_path='' as $$
+ select exists(select 1 from archive.groups g join bur_access.group_members m on m.group_id=g.id
+ where g.slug=p_group and m.user_id=p_user_id);
+$$;
+revoke all on function public.bur_archive_authorized(uuid,text) from public,anon,authenticated;
+grant execute on function public.bur_archive_authorized(uuid,text) to service_role;
 
 create or replace function public.bur_archive_search(
  p_user_id uuid,p_group text,p_query text,p_vector jsonb default null,

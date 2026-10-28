@@ -30,4 +30,5 @@ jobs:
       - run: npm test
         working-directory: archive-pipeline
       - run: python archive-pipeline/test_verified_import.py
+      - run: python archive-pipeline/test_watcher.py
       - run: python archive-pipeline/test_portal.py

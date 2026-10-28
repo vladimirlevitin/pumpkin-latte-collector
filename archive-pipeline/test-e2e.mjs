@@ -10,7 +10,7 @@ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'bur-e2e-')),db=new PGlite({ext
 let server;
 try{
  for(const name of ['fixtures/schema.sql','fixtures/existing-import.sql','staging-receipt.sql','staging-search.sql','staging-index.sql'])await db.exec(await fs.readFile(new URL(name,import.meta.url),'utf8'));
- const allowed=new Set(['bur_import_archived_json','bur_verify_import_receipt','bur_stage_prepare_units','bur_stage_claim_embeddings','bur_stage_store_embedding','bur_stage_index_status','bur_archive_search']);
+ const allowed=new Set(['bur_import_archived_json','bur_verify_import_receipt','bur_stage_prepare_units','bur_stage_claim_embeddings','bur_stage_store_embedding','bur_stage_index_status','bur_archive_search','bur_archive_authorized']);
  server=http.createServer(async(req,res)=>{
   try{
    let text='';for await(const chunk of req)text+=chunk;

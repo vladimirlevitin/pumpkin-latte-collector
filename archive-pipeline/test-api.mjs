@@ -5,6 +5,7 @@ let calls=[],mode='ok';
 const fetcher=async(url,args)=>{
  calls.push({url,args});
  if(url.endsWith('/auth/v1/user'))return Response.json(mode==='bad_auth'?{}:{id:'00000000-0000-0000-0000-000000000100'},{status:mode==='bad_auth'?401:200});
+ if(url.endsWith('/bur_archive_authorized'))return Response.json(mode!=='denied');
  if(url.includes('googleapis'))return Response.json({error:'unavailable'},{status:503});
  if(mode==='denied')return Response.json({code:'42501'},{status:403});
  return Response.json({group:'one',results:[],semantic_used:false});

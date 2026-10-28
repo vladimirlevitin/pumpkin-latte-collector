@@ -102,7 +102,9 @@ def import_batch(path,client,receipt_dir):
         raise ValueError('database readback failed; batch remains unacknowledged locally')
     result={'sha256':digest,'group':group,'batch_id':payload['job_summary']['id'],
             'crawl_run_id':receipt['crawl_run_id'],'post_count':len(ids),'verified':True,
-            'partial_deep':bool(payload['job_summary'].get('deep_errors')),'target':client.base}
+            'partial_deep':bool(payload['job_summary'].get('deep_errors')) or
+              int(payload['job_summary'].get('deep_done') or 0)<len(ids),
+            'target':client.base}
     directory=Path(receipt_dir);directory.mkdir(parents=True,exist_ok=True)
     # Receipt is never used to skip remote verification. Atomic replace survives a crash.
     out=directory/(digest+'.json');tmp=out.with_suffix('.tmp')

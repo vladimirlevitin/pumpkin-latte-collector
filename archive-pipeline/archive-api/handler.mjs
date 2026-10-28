@@ -26,6 +26,12 @@ export function createHandler({env,fetcher=fetch}){
    if(!/^[A-Za-z0-9_.-]{1,128}$/.test(group)||!query||query.length>2000)return reply(400,{error:'invalid_query'});
    const topics=Array.isArray(body.topics)?body.topics.map(String):[];
    if(topics.length>30||topics.some(x=>!/^[A-Za-z0-9_-]{1,100}$/.test(x)))return reply(400,{error:'invalid_topics'});
+   const serviceHeaders={'content-type':'application/json',apikey:env.SUPABASE_SERVICE_ROLE_KEY};
+   if(env.SUPABASE_SERVICE_ROLE_KEY.startsWith('eyJ'))serviceHeaders.authorization='Bearer '+env.SUPABASE_SERVICE_ROLE_KEY;
+   const access=await fetcher(env.SUPABASE_URL+'/rest/v1/rpc/bur_archive_authorized',{
+    method:'POST',headers:serviceHeaders,body:JSON.stringify({p_user_id:user.id,p_group:group}),signal:AbortSignal.timeout(10000)});
+   if(!access.ok)return reply(502,{error:'authorization_unavailable'});
+   if(await access.json()!==true)return reply(403,{error:'group_access_denied'});
    let vector=null,warning=null;
    if(body.semantic!==false&&env.GEMINI_API_KEY){
     try{
@@ -34,11 +40,9 @@ export function createHandler({env,fetcher=fetch}){
       body:JSON.stringify({content:{parts:[{text:'task: search result | query: '+query}]},outputDimensionality:768}),signal:AbortSignal.timeout(30000)});
      if(!embedded.ok)throw Error('embedding_unavailable');
      const j=await embedded.json();vector=j?.embedding?.values;
-     if(!Array.isArray(vector)||vector.length!==768||vector.some(x=>!Number.isFinite(x)))throw Error('invalid_embedding');
+     if(!Array.isArray(vector)||vector.length!==768||vector.some(x=>!Number.isFinite(x))||!vector.some(x=>x!==0))throw Error('invalid_embedding');
     }catch{vector=null;warning='semantic_unavailable_using_keywords';}
    }else if(body.semantic!==false)warning='semantic_not_configured_using_keywords';
-   const serviceHeaders={'content-type':'application/json',apikey:env.SUPABASE_SERVICE_ROLE_KEY};
-   if(env.SUPABASE_SERVICE_ROLE_KEY.startsWith('eyJ'))serviceHeaders.authorization='Bearer '+env.SUPABASE_SERVICE_ROLE_KEY;
    const response=await fetcher(env.SUPABASE_URL+'/rest/v1/rpc/bur_archive_search',{
     method:'POST',headers:serviceHeaders,
     body:JSON.stringify({p_user_id:user.id,p_group:group,p_query:query,p_vector:vector,p_topics:topics,p_limit:Math.max(1,Math.min(100,Number(body.limit)||20))}),signal:AbortSignal.timeout(20000)});
