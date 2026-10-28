@@ -1,9 +1,9 @@
 'use strict';
 const assert=require('node:assert/strict');
 const S=require('../checkpoint-seek.js');
-async function run({count=4000,target=3217,delay=5,gap=false,missing=false,pause=false,variable=false}={}){
+async function run({count=4000,target=3217,delay=5,gap=false,missing=false,pause=false,variable=false,header=0}={}){
  const doc={scrollingElement:{}},el=doc.scrollingElement,seen=new Set();
- const offsets=[0],heights=Array.from({length:count},(_,i)=>variable?100+(i*137)%550:200);
+ const offsets=[header],heights=Array.from({length:count},(_,i)=>variable?100+(i*137)%550:200);
  for(const h of heights)offsets.push(offsets.at(-1)+h);
  const id=i=>String(9000000000000000n-BigInt((i*7919)%10000000)); // deliberately nonchronological
  let pos=0,ticks=0,loading=0,paused=false,found=false,submissions=0,rewound=0,last=0;
@@ -35,6 +35,7 @@ async function run({count=4000,target=3217,delay=5,gap=false,missing=false,pause
 }
 (async()=>{
  console.log('delayed virtualized 4000 cards',await run());
+ console.log('group header with no cards yet',await run({count:100,target:28,header:2400}));
  console.log('rewind on overshoot',await run({gap:true}));
  console.log('variable heights/overlapping virtual windows',await run({variable:true}));
  console.log('pause/resume',await run({pause:true}));

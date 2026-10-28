@@ -1,0 +1,38 @@
+name: Verify and package Bur 0.5.22 hotfix
+on:
+  push:
+    branches: [fix/bur-0522-first-card-and-metadata]
+  pull_request:
+    paths: ['bur-extension/0.5.22-alpha/**','.github/workflows/package-bur-0522-hotfix.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Syntax validation
+        run: |
+          node --check bur-extension/0.5.22-alpha/core.js
+          node --check bur-extension/0.5.22-alpha/checkpoint-seek.js
+          node --check bur-extension/0.5.22-alpha/content.js
+          node --check bur-extension/0.5.22-alpha/background.js
+      - name: Check checkpoint and release invariants
+        run: |
+          node bur-extension/0.5.22-alpha/tests/test-checkpoint-seek.js
+          node bur-extension/0.5.22-alpha/tests/test-checkpoint-worker.js
+          node bur-extension/0.5.22-alpha/tests/test-release.js
+      - name: Make installable ZIP
+        run: |
+          cd bur-extension/0.5.22-alpha
+          zip -q -r ../../FB-Bur-0.5.22-hotfix.zip manifest.json background.js checkpoint-seek.js content.js core.js feed-scroll.js export.html export.js popup.html popup.js icons README-RU.txt CHANGELOG.txt
+          unzip -t ../../FB-Bur-0.5.22-hotfix.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FB-Bur-0.5.22-hotfix-ZIP
+          path: FB-Bur-0.5.22-hotfix.zip
+          retention-days: 30

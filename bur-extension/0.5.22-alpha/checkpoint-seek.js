@@ -41,7 +41,10 @@ async function step({job,doc,view,scroll,observe,wait,submit,stopped}){
    const overlap=rendered(after)&&[...ids(after)].some(id=>oldIds.has(id));
    // Virtualization jumped over every observed card: rewind and inspect a smaller slice.
    // No overlap is not proof of a missing target or end of feed.
-   if(!oldIds.size||!overlap){
+   // Above the first Facebook card (group header), there is no anchor yet.
+   // Allow bounded forward movement until the first real post appears; do not rewind to the header.
+   if(!oldIds.size){moved=true;break;}
+   if(!overlap){
     set(pos);s.rewinds++;s.stable=0;
     const restored=await settle(rows=>[...ids(rows)].some(id=>oldIds.has(id)));if(!restored)return {stop:true};
     if(![...ids(restored)].some(id=>oldIds.has(id)))return {stalled:true,diagnostics:{reason:'anchor_lost',...s}};
