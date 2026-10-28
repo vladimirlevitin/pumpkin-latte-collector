@@ -29,7 +29,7 @@ function feedObservations(group){
   // actual viewport overlap; if neither is visible, keep the one nearest the viewport.
   const distance=visible?0:top===null?1e12:top>=vh?top-vh:Math.max(0,-bottom);
   const prevDistance=prev?prev.visible?0:prev.top===null?1e12:prev.top>=vh?prev.top-vh:Math.max(0,-prev.bottom):1e12;
-  if(!prev||overlap>(prev._overlap||0)||(overlap===(prev._overlap||0)&&distance<prevDistance))found.set(row.key,{...obs,_overlap:overlap});
+  if(!prev||prev.post.is_pinned&&!row.is_pinned||Boolean(prev.post.is_pinned)===Boolean(row.is_pinned)&&(overlap>(prev._overlap||0)||(overlap===(prev._overlap||0)&&distance<prevDistance)))found.set(row.key,{...obs,_overlap:overlap});
  }
  return [...found.values()].map(({_overlap,...x})=>x).sort((a,b)=>{
   const at=Number.isFinite(a.top)?a.top:Number.POSITIVE_INFINITY,bt=Number.isFinite(b.top)?b.top:Number.POSITIVE_INFINITY;
@@ -190,7 +190,7 @@ chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
  if(msg?.type==='burCheckpointSet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ok:false});return;}const key='fb-bur-checkpoint-v3:'+group;if(msg.post_id)localStorage.setItem(key,String(msg.post_id));else localStorage.removeItem(key);reply({ok:true});return;}
  if(msg?.type==='burHistoryGet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ids:[]});return;}try{const raw=JSON.parse(localStorage.getItem('fb-bur-history-v1:'+group)||'[]');reply({ids:Array.isArray(raw)?raw.filter(x=>/^\d{8,30}$/.test(String(x))).slice(-50000):[]});}catch{reply({ids:[]});}return;}
  if(msg?.type==='burHistorySet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ok:false});return;}try{const ids=Array.isArray(msg.ids)?msg.ids.map(String).filter(x=>/^\d{8,30}$/.test(x)).slice(-50000):[];localStorage.setItem('fb-bur-history-v1:'+group,JSON.stringify(ids));reply({ok:true,count:ids.length});}catch{reply({ok:false});}return;}
- if(msg?.type==='burWake')setTimeout(tick,300);
+ if(msg?.type==='burWake'){reply({ready:true});setTimeout(tick,300);return;}
 });
 setTimeout(tick,900);setInterval(tick,2600);
 })();

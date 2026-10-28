@@ -449,6 +449,16 @@
     }
     return {author,author_url,author_is_anonymous,...extractDate(node),media:extractMedia(node)};
   }
+  function isPinned(node){
+    const body=node.querySelector('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"]');
+    for(const el of node.querySelectorAll('[aria-label],h2,h3')){
+      if(!ownElement(el,node)||body?.contains(el))continue;
+      if(body&&el.getBoundingClientRect().top>body.getBoundingClientRect().top+2)continue;
+      const label=clean(el.getAttribute('aria-label')||el.innerText||el.textContent);
+      if(/^(?:Pinned post|Pinned|Featured post|Закрепл[её]нная публикация|Закреплено|פוסט מוצמד)$/iu.test(label))return true;
+    }
+    return false;
+  }
   function extractCard(node,group,loc) {
     const raw=clean(node.innerText||node.textContent||'');
     if(raw.length<35)return null;
@@ -478,7 +488,7 @@
     const metadata=extractPostMetadata(node);
     return normalizePost({group,post_id:link.id,permalink:link.url,post_text:main,
       post_text_quality:body?'body_selector':'whole_card_unstructured',visible_card_text:raw,
-      comments,...metadata,links:bodyNode?extractLinks(bodyNode,node):[],source_page:loc||'',snapshot_at:new Date().toISOString(),collector,
+      comments,...metadata,is_pinned:isPinned(node),links:bodyNode?extractLinks(bodyNode,node):[],source_page:loc||'',snapshot_at:new Date().toISOString(),collector,
       warning:comments.length?'Only already visible comments; thread completeness unknown.':'No separately extracted visible comments; completeness unknown.'},group);
   }
   return {uniqueMedia,collector,clean,hash,idFromPermalink,canonicalUrl,textQuality,truncated,

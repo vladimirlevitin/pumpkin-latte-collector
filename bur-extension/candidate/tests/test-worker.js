@@ -28,6 +28,7 @@ async function deepAll(){let j=await extCall('status');while(j.stage==='deep'){c
  spawn();
  let j=await extCall('start',{tabId:5,url:tabs.get(5).url,options:{maxPosts:5,maxSteps:500}});
  assert.equal(j.stage,'discover');assert.equal(j.feedTabId,5);assert.equal(j.deepTabId,null);assert.equal(injections,1);
+ await extCall('rewindResult',{result:{ok:true}},feedSender());
  const feedUrl=tabs.get(5).url;
  // Batch 1 discovery reaches 5 and MUST create a separate deep tab without moving feed.
  let r=await extCall('discover',{posts:[0,1,2,3,4].map(makePost),step:1},feedSender());
@@ -54,7 +55,7 @@ async function deepAll(){let j=await extCall('status');while(j.stage==='deep'){c
  await extCall('deepError',{id:j.queue[j.index],error:'transient fixture failure'},deepSender(j));
  await deepAll();j=await extCall('status');assert.equal(j.stage,'exporting');assert.equal(j.deepErrors,1);
  await extCall('exportComplete',{batchNumber:2,sessionId:j.id,sha256:'c'.repeat(64),downloadId:12,filename:'partial.json'},exportSender());
- j=await extCall('status');assert.equal(j.stage,'stalled');assert.equal(j.queue.length,1);
+ j=await extCall('status');assert.equal(j.stage,'stalled');assert.equal(j.queue.length,1);assert.equal(j.batchDeepTotal,5);
  assert.equal(storage['burCollectorCheckpoints-v0520'].backpackIL.post_id,makePost(4).post_id);
  spawn();await extCall('resume',{tabId:5,url:tabs.get(5).url});await deepAll();j=await extCall('status');
  assert.equal(j.stage,'exporting');assert.equal(j.deepErrors,0);assert.equal(j.lastCollectedPostId,makePost(9).post_id);

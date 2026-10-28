@@ -1,7 +1,7 @@
 /* FB Bur 0.5.23-alpha. Continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
-importScripts('core.js');
-const C=globalThis.FBBurCore;
-const DB='bur-collector-v05', DBVER=1,JOB_KEY='burCollectorJob-v0520',CHECKPOINT_KEY='burCollectorCheckpoints-v0520',HISTORY_KEY='burCollectorHistory-v0520',RECEIPT_KEY='burCollectorExportReceipts-v1',ALARM='bur-collector-watchdog';
+importScripts('core.js','archive-state.js');
+const C=globalThis.FBBurCore,A=globalThis.FBBurArchive;
+const DB='bur-collector-v05', DBVER=1,JOB_KEY='burCollectorJob-v0520',CHECKPOINT_KEY='burCollectorCheckpoints-v0520',HISTORY_KEY='burCollectorHistory-v0520',RECEIPT_KEY='burCollectorExportReceipts-v1',ARCHIVE_KEY='burCollectorArchives-v1',SAVED_JOB_KEY='burCollectorSavedJobs-v1',ALARM='bur-collector-watchdog';
 const VERSION='0.5.23-alpha',CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
 const historyCache=new Map();
 const DEFAULTS={maxPosts:50,maxSteps:15000};
@@ -14,7 +14,25 @@ async function clearGroup(group){const db=await openDB();try{await new Promise((
 async function putOne(p){const db=await openDB();try{await new Promise((resolve,reject)=>{const tx=db.transaction('posts','readwrite');tx.objectStore('posts').put(p);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});}finally{db.close();}}
 async function putMany(rows,group){let added=0,updated=0;const db=await openDB();try{await new Promise((resolve,reject)=>{const tx=db.transaction('posts','readwrite'),s=tx.objectStore('posts');tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);for(const raw of rows){const row=C.normalizePost(raw,group);if(!row.post_id||row.group!==group)continue;const request=s.get(row.key);request.onsuccess=()=>{const old=request.result;if(old)updated++;else added++;s.put(C.mergePosts(old,row,group));};}});}finally{db.close();}return {added,updated};}
 async function getJob(){return (await chrome.storage.local.get(JOB_KEY))[JOB_KEY]||null;}
-async function setJob(j){j.updatedAt=now();await chrome.storage.local.set({[JOB_KEY]:j});return j;}
+async function setJob(j,extra={}){
+ j.updatedAt=now();const saved=(await chrome.storage.local.get(SAVED_JOB_KEY))[SAVED_JOB_KEY]||{};
+ saved[j.group]||={};saved[j.group][j.runMode||'history']=j;
+ await chrome.storage.local.set({[JOB_KEY]:j,[SAVED_JOB_KEY]:saved,...extra});return j;
+}
+async function archiveMap(){return (await chrome.storage.local.get(ARCHIVE_KEY))[ARCHIVE_KEY]||{};}
+async function archiveFor(group){const map=await archiveMap();return map[group]||A.empty(group);}
+async function archiveJob(j,operation){
+ const map=await archiveMap(),state=map[j.group]||A.empty(j.group);
+ map[j.group]=operation(state);await setJob(j,{[ARCHIVE_KEY]:map});return map[j.group];
+}
+async function finishUpdate(j){
+ if(!j.updateBoundaryReached||j.discoveryOrder?.length||j.deferredRows?.length)throw Error('Пополнение ещё не сохранено');
+ const map=await archiveMap();let state=map[j.group];
+ if(!state?.runs[j.id])throw Error('Нет состояния пополнения');
+ if(state.runs[j.id]?.status==='suspended')state=A.resume(state,j.id);state=A.reachBoundary(state,j.id,j.updateStopId);state=A.finish(state,j.id);map[j.group]=state;
+ j.stage='done';j.paused=false;j.note='Пополнение сохранено до прежней верхней границы. Исторический хвост не изменён.';
+ j.archiveHead=state.head;j.archiveTail=state.tail;await setJob(j,{[ARCHIVE_KEY]:map});return j;
+}
 async function getCheckpoints(){return (await chrome.storage.local.get(CHECKPOINT_KEY))[CHECKPOINT_KEY]||{};}
 async function setCheckpoint(group,postId,meta={}){
  const all=await getCheckpoints();if(postId)all[group]={post_id:String(postId),saved_at:new Date().toISOString(),...meta};else delete all[group];
@@ -84,11 +102,17 @@ async function admitRows(j,rows){
  const historical=await historyFor(j.group,j.feedTabId??j.tabId);
  const order=Array.isArray(j.discoveryOrder)?j.discoveryOrder.map(String):[],known=new Set(order),batchSeen=new Set();
  const eligible=[],newIds=[];let historyRejected=0,remaining=Math.max(0,(j.options?.maxPosts||0)-order.length);
- for(const raw of rows||[]){
-  const id=String(raw?.post_id||'');if(!id||blocked.has(id)||batchSeen.has(id))continue;batchSeen.add(id);
-  if(historical.has(id)&&!known.has(id)){historyRejected++;continue;}
-  if(!known.has(id)){if(remaining<=0)continue;known.add(id);order.push(id);newIds.push(id);remaining--;}
-  eligible.push(raw);
+ const source=rows||[];
+ for(let rowIndex=0;rowIndex<source.length;rowIndex++){
+  const raw=source[rowIndex];
+  if(raw?.group&&raw.group!==j.group)continue;
+  if(raw?._stopBoundary){j.updateBoundaryReached=true;j.updateBoundaryFoundAt=new Date().toISOString();break;}
+  const id=String(raw?.post_id||'');if(!id||blocked.has(id)&&!raw._burRetainedDraft||batchSeen.has(id))continue;batchSeen.add(id);
+  if(!raw._burRetainedDraft&&j.runMode!=='update'&&historical.has(id)&&!known.has(id)){historyRejected++;continue;}
+  if(!known.has(id)){if(remaining<=0){j.deferredRows=(j.deferredRows||[]).concat(source.slice(rowIndex));break;}known.add(id);order.push(id);newIds.push(id);remaining--;}
+  j.feedPinById||={};if(!(id in j.feedPinById))j.feedPinById[id]=raw.is_pinned===true;
+  j.headCandidates||=[];if(!raw.is_pinned&&!j.headCandidates.includes(id))j.headCandidates.push(id);
+  const stored={...raw,feed_is_pinned:j.feedPinById[id]};delete stored._burRetainedDraft;eligible.push(stored);
  }
  const allowed=new Set(order),toStore=eligible.filter(r=>allowed.has(String(r.post_id||'')));
  const db=toStore.length?await putMany(toStore,j.group):{added:0,updated:0};
@@ -135,44 +159,61 @@ function isRootFeedUrl(url,group){try{const u=new URL(url);return groupOf(url)==
 function feedId(j){return j?.feedTabId??j?.tabId??null;}
 function deepId(j){return j?.deepTabId??null;}
 function senderRole(j,sender){const id=sender?.tab?.id;if(!j||!id)return null;if(id===feedId(j)&&groupOf(sender.tab?.url)===j.group)return 'feed';if(id===deepId(j)&&groupOf(sender.tab?.url)===j.group)return 'deep';return null;}
-async function start({tabId,url,options={},replacePaused=false,startAfter=null}){
+async function start({tabId,url,options={},replacePaused=false,startAfter=null,mode='history'}){
  const group=groupOf(url);
  if(!group||!isRootFeedUrl(url,group))throw Error('Откройте корень ленты нужной Facebook-группы');
  const feedReady=await ensureContent(tabId,group);
  const existing=await getJob();
  if(existing&&existing.stage!=='done'&&!(replacePaused&&existing.paused))throw Error('Сбор уже существует: нажмите «Продолжить» либо поставьте его на паузу перед запуском другой группы.');
+ if(!['history','update'].includes(mode))throw Error('Неизвестный режим сбора');
+ const saved=(await chrome.storage.local.get(SAVED_JOB_KEY))[SAVED_JOB_KEY]||{};
+ const previous=saved[group]?.[mode];
+ if(previous&&previous.stage!=='done'&&!startAfter){
+  const restoring={...previous,feedTabId:tabId,tabId};
+  if(feedId(previous)!==tabId)restoring.feedPageInstance='';
+  await setJob(restoring);return resume(tabId,url);
+ }
+ if(previous&&previous.stage!=='done'&&startAfter&&(previous.discoveryOrder?.length||['deep','exporting'].includes(previous.stage)))throw Error('Сначала завершите сохранение текущего пакета');
  const opts={maxPosts:Math.max(5,Math.min(5000,Math.trunc(Number(options.maxPosts)||DEFAULTS.maxPosts))),maxSteps:Math.max(100,Math.min(50000,Math.trunc(Number(options.maxSteps)||DEFAULTS.maxSteps)))};
  const manual=String(startAfter||'').trim();if(manual&&!/^\d{8,30}$/.test(manual))throw Error('post_id должен состоять только из цифр');
- const checkpoint=manual?await setCheckpoint(group,manual,{manual:true,source:'popup',algorithm:CHECKPOINT_ALGORITHM}):await checkpointForStart(group,existing,tabId);
+ const checkpoint=mode==='update'?null:manual?await setCheckpoint(group,manual,{manual:true,source:'popup',algorithm:CHECKPOINT_ALGORITHM}):await checkpointForStart(group,existing,tabId);
+ if(mode==='update'&&manual)throw Error('Режим пополнения использует сохранённую верхнюю границу');
  if(manual)await setPageCheckpoint(tabId,group,manual);
  const history=await historyFor(group,tabId);
  // Retain local snapshots across restarts and group switches.
- const hasCheckpoint=Boolean(checkpoint?.post_id),id=now().toString(36);
- const j={id,sessionId:id,version:VERSION,checkpointAlgorithm:CHECKPOINT_ALGORITHM,group,tabId,feedTabId:tabId,deepTabId:null,exportTabId:null,
+ const archives=await archiveMap();let archive=archives[group]||A.empty(group);
+ const legacy=(await getCheckpoints())[group];
+ if(!archive.tail&&legacy?.post_id&&legacy.algorithm===CHECKPOINT_ALGORITHM){archive.tail=legacy.post_id;archive.tail_source='legacy_unverified';}
+ if(mode==='update'&&!archive.head&&!archive.tail)throw Error('Сначала нужен первый сбор этой группы');
+ archives[group]=archive;
+ const hasCheckpoint=Boolean(checkpoint?.post_id),id=now().toString(36)+'-'+Math.random().toString(36).slice(2,7);
+ const j={id,sessionId:id,runMode:mode,archiveManaged:true,archiveRunStarted:false,archiveHead:archive.head,archiveTail:archive.tail,updateStopId:mode==='update'?(archive.head||archive.tail):null,updateBaseline:mode==='update'&&!archive.head,updateBoundaryReached:false,deferredRows:[],runStartsFromRoot:!hasCheckpoint,version:VERSION,checkpointAlgorithm:CHECKPOINT_ALGORITHM,group,tabId,feedTabId:tabId,deepTabId:null,exportTabId:null,
   stage:'discover',paused:false,startedAt:now(),lastSeen:now(),batchStartedAt:now(),batchNumber:1,completedBatches:0,sessionPosts:0,sessionDeepDone:0,sessionDeepErrors:0,
   steps:0,discovered:0,deepDone:0,deepErrors:0,queue:[],discoveryOrder:[],checkpointSeenIds:[],historyRejected:0,historyCount:history.size,index:0,options:opts,
   checkpointPostId:checkpoint?.post_id||null,checkpointPending:hasCheckpoint,checkpointFound:false,checkpointScanSteps:0,checkpointSource:manual?'manual':(checkpoint?.recovered_after_reinstall?'facebook_localstorage':'stored'),
-  rewindPending:hasCheckpoint,rewindVerified:!hasCheckpoint,rewindDiagnostics:null,liveBoundaryPending:false,liveBoundaryPostId:null,liveBoundaryScanSteps:0,
+  rewindPending:true,rewindVerified:false,rewindDiagnostics:null,liveBoundaryPending:false,liveBoundaryPostId:null,liveBoundaryScanSteps:0,
   feedPageInstance:String(feedReady?.pageInstance||''),feedAnchorScrollY:Number(feedReady?.scrollY)||0,feedAnchorAt:new Date().toISOString(),feedContinuationMode:'start',
-  note:hasCheckpoint?'Аварийный старт: возвращаю ленту наверх и ищу checkpoint '+checkpoint.post_id+'. После него сессия будет идти непрерывно.':'Непрерывная сессия: вкладка ленты остаётся на месте, deep выполняется отдельно.'};
- await setJob(j);
+  note:mode==='update'?(archive.head?'Собираю новые публикации до прежней верхней границы.':'Верхняя граница пока неизвестна. Связываю начало группы с прежней выгрузкой до сохранённого хвоста.'):hasCheckpoint?'Аварийный старт: возвращаю ленту наверх и ищу checkpoint '+checkpoint.post_id+'. После него сессия будет идти непрерывно.':'Непрерывная сессия: вкладка ленты остаётся на месте, deep выполняется отдельно.'};
+ await setJob(j,{[ARCHIVE_KEY]:archives});
  if(hasCheckpoint){await chrome.tabs.reload(tabId);return j;}
  await notifyTab(tabId);return j;
 }
-async function pause(){const j=await getJob();if(!j)return null;j.paused=true;j.note='Сессия поставлена на паузу. Позиция feed-вкладки сохранена.';return setJob(j);}
+async function pause(){const j=await getJob();if(!j)return null;j.paused=true;j.note='Сессия поставлена на паузу. Данные пакета сохранены.';if(j.archiveRunStarted)await archiveJob(j,state=>A.suspend(state,j.id));return setJob(j);}
 async function resume(tabId,url){
  const j=await getJob();if(!j)throw Error('Нет задания');
  if(tabId!==feedId(j))throw Error('Сессия привязана к исходной вкладке ленты '+j.group+'. Вернитесь в неё.');
  if(groupOf(url)!==j.group)throw Error('Сессия привязана к группе '+j.group+'. Текущая вкладка открыта в другой группе.');
+ if(j.archiveRunStarted)await archiveJob(j,state=>A.resume(state,j.id));
  j.paused=false;j.resumeCount=(j.resumeCount||0)+1;
  if(j.stage==='stalled'){j.stage=j.stall?.resumeStage||'discover';j.stall=null;}
  await setJob(j);
- if(j.stage==='deep')await navigateCurrent(j);
+ if(j.readyForDeep){j.readyForDeep=false;await beginDeep(j,'сохранённый участок');}
+ else if(j.stage==='deep')await navigateCurrent(j);
  else if(j.stage==='exporting')await openExport(j);
  else if(j.stage==='discover'){
   const probe=await probeFeedState(feedId(j),j.group);
   if(!probe.ok)await recoverFeedFromCheckpoint(j,'Вкладка ленты недоступна при возобновлении',probe);
-  else if(!j.checkpointPending&&j.feedPageInstance&&!feedPositionPreserved(j,probe)){
+  else if(!j.checkpointPending&&!j.rewindPending&&!feedPositionPreserved(j,probe)){
    await recoverFeedFromCheckpoint(j,'При возобновлении обнаружена реальная потеря живой feed-позиции',{
     expectedPageInstance:j.feedPageInstance,actualPageInstance:probe.pageInstance,
     anchorScrollY:j.feedAnchorScrollY??null,actualScrollY:probe.scrollY??null
@@ -200,8 +241,8 @@ async function beginDeep(j,reason){
  if(feedProbe.ok){j.feedPageInstance=feedProbe.pageInstance;j.feedAnchorScrollY=feedProbe.scrollY;j.feedAnchorAt=new Date().toISOString();j.feedContinuationMode='deep_anchor';}
  const all=await allPosts(j.group),byId=new Map(all.filter(p=>p.post_id).map(p=>[String(p.post_id),p]));
  let ids=(Array.isArray(j.discoveryOrder)?j.discoveryOrder:[]).map(String).filter(id=>byId.has(id));
- if(!ids.length&&all.length)ids=all.filter(p=>p.post_id).sort((a,b)=>String(a.first_seen||'').localeCompare(String(b.first_seen||''))||String(a.key).localeCompare(String(b.key))).map(p=>String(p.post_id));
- j.queue=ids;j.index=0;j.stage='deep';j.paused=false;j.stall=null;j.batchDeepStartedAt=now();
+ if(!j.archiveManaged&&!ids.length&&all.length)ids=all.filter(p=>p.post_id).sort((a,b)=>String(a.first_seen||'').localeCompare(String(b.first_seen||''))||String(a.key).localeCompare(String(b.key))).map(p=>String(p.post_id));
+ j.queue=ids;j.batchDeepTotal=ids.length;j.index=0;j.stage='deep';j.paused=false;j.stall=null;j.batchDeepStartedAt=now();
  j.note='Пакет '+j.batchNumber+': разведка окончена ('+reason+'). Feed-вкладка остаётся на месте; deep идёт в отдельной вкладке.';
  await setJob(j);
  if(j.queue.length){await ensureDeepTab(j);await navigateCurrent(j);}else await finishBatch(j);
@@ -216,10 +257,12 @@ async function collectFound(tabId,url){
 async function stall(j,reason,details,resumeStage){j.stage='stalled';j.paused=true;j.stall={at:new Date().toISOString(),reason,details:details||null,resumeStage:resumeStage||j.stage};j.note='Приостановлено: '+reason+'. Данные не отмечены как завершённый пакет.';await setJob(j);return j;}
 async function recoverFeedFromCheckpoint(j,reason,details=null){
  const boundary=String(j.lastCollectedPostId||j.checkpointPostId||'');
- if(!/^\d{8,30}$/.test(boundary))return stall(j,'Позиция ленты потеряна, а подтверждённого checkpoint ещё нет',{reason,details},'discover');
+ const hasBoundary=/^\d{8,30}$/.test(boundary);
+ const rows=await allPosts(j.group),byId=new Map(rows.map(p=>[String(p.post_id),p]));
+ j.deferredRows=(j.discoveryOrder||[]).map(id=>byId.get(String(id))).filter(Boolean).concat(j.deferredRows||[]).map(row=>row._stopBoundary?row:{...row,is_pinned:j.feedPinById?.[String(row.post_id)]??row.is_pinned,_burRetainedDraft:true});
  // Re-discovery merges retained snapshots.
- j.stage='discover';j.paused=false;j.steps=0;j.discovered=0;j.deepDone=0;j.deepErrors=0;j.queue=[];j.index=0;j.discoveryOrder=[];j.checkpointSeenIds=[];j.historyRejected=0;
- j.checkpointPostId=boundary;j.checkpointPending=true;j.checkpointFound=false;j.checkpointScanSteps=0;j.checkpointSource='recovery';
+ j.stage='discover';j.paused=false;j.steps=0;j.discovered=0;j.headCandidates=[];j.feedPinById={};j.deepDone=0;j.deepErrors=0;j.batchDeepTotal=0;j.queue=[];j.index=0;j.discoveryOrder=[];j.checkpointSeenIds=[];j.historyRejected=0;
+ j.checkpointPostId=hasBoundary?boundary:null;j.checkpointPending=hasBoundary;j.checkpointFound=false;j.checkpointScanSteps=0;j.checkpointSource='recovery';
  j.liveBoundaryPending=false;j.liveBoundaryPostId=null;j.liveBoundaryScanSteps=0;j.rewindPending=true;j.rewindVerified=false;j.rewindDiagnostics=null;
  j.feedRecoveryCount=(j.feedRecoveryCount||0)+1;j.resumeCount=(j.resumeCount||0)+1;
  j.note='Позиция живой ленты потеряна. Автовосстановление от checkpoint '+boundary+'; снимки незавершённого пакета сохранены локально для повторной обработки.';
@@ -274,7 +317,8 @@ async function rewindResult(msg,sender){
  if(!j.rewindPending)return {ignored:true,alreadyDone:true};
  const r=msg.result||{};j.lastSeen=now();j.rewindDiagnostics=r;
  if(!r.ok)return stall(j,'Не удалось надёжно вернуть Facebook-ленту к самому верху; checkpoint не ищется',{rewind:r},'discover');
- j.rewindPending=false;j.rewindVerified=true;j.rewindDoneAt=new Date().toISOString();j.steps=0;j.checkpointScanSteps=0;j.checkpointSeenIds=[];j.note='Верх подтверждён. Ищу аварийный checkpoint '+j.checkpointPostId+'.';
+ j.rewindPending=false;j.rewindVerified=true;j.rewindDoneAt=new Date().toISOString();j.steps=0;j.checkpointScanSteps=0;j.checkpointSeenIds=[];j.note=j.checkpointPending?'Верх подтверждён. Ищу точку продолжения '+j.checkpointPostId+'.':j.runMode==='update'?'Верх подтверждён. Собираю до сохранённой границы '+j.updateStopId+'.':'Верх подтверждён. Начинаю сбор истории группы.';
+ if(j.archiveManaged&&!j.archiveRunStarted){j.archiveRunStarted=true;await archiveJob(j,state=>A.begin(state,{runId:j.id,mode:j.runMode,fromRoot:j.runStartsFromRoot}));}
  await setJob(j);await notifyTab(feedId(j));return {ok:true,rewindVerified:true,checkpoint:j.checkpointPostId};
 }
 async function discovered(msg,sender){
@@ -307,7 +351,7 @@ async function discovered(msg,sender){
    await setJob(j);return {added:0,updated:0,stage:j.stage,discovered:j.discovered,seekingCheckpoint:true,checkpoint:j.checkpointPostId,seenBeforeCheckpoint:j.checkpointSeenIds.length};
   }
   const top=cp.top;rememberCheckpointSeen(j,observations.filter(o=>Number.isFinite(o.top)&&o.top<=top+4).map(o=>o.post.post_id));rememberCheckpointSeen(j,[j.checkpointPostId]);
-  j.steps=0;j.checkpointPending=false;j.checkpointFound=true;j.checkpointFoundAt=new Date().toISOString();j.checkpointFoundTop=top;j.feedStallRecoveries=0;
+  j.steps=0;j.checkpointPending=false;j.checkpointFound=true;j.checkpointFoundAt=new Date().toISOString();j.verifiedSeekPostId=j.checkpointPostId;j.checkpointFoundTop=top;j.feedStallRecoveries=0;
   j.historyCount=(await historyFor(j.group,feedId(j))).size; // observed is not archived
   candidateRows=observations.filter(o=>Number.isFinite(o.top)&&Number.isFinite(o.bottom)&&o.top>top+4&&o.bottom>0).map(o=>o.post);
  }else{
@@ -315,9 +359,22 @@ async function discovered(msg,sender){
    ? observations.filter(o=>Number.isFinite(o.bottom)&&o.bottom>0).map(o=>o.post)
    : observations.map(o=>o.post);
  }
- const r=await admitRows(j,candidateRows);if(r.added){j.obstructionRecoveries=0;j.feedStallRecoveries=0;}
+ if(j.runMode==='update'){
+  const anyTarget=observations.find(o=>String(o.post.post_id)===j.updateStopId&&!o.post.is_pinned);
+  const target=anyTarget&&Number.isFinite(anyTarget.top)&&Number.isFinite(anyTarget.bottom)&&anyTarget.bottom>0&&anyTarget.top<vh?anyTarget:null;
+  candidateRows=candidateRows.filter(p=>String(p.post_id)!==j.updateStopId);
+  if(anyTarget&&!target){if(anyTarget.bottom<=0)return stall(j,'Верхняя граница оказалась выше viewport без подтверждённого пересечения',null,'discover');candidateRows=candidateRows.filter(p=>{const o=observations.find(x=>x.post.post_id===p.post_id);return o&&o.top<anyTarget.top;});}
+  if(target){
+   candidateRows=candidateRows.filter(p=>{const o=observations.find(x=>x.post.post_id===p.post_id);return o&&Number.isFinite(o.top)&&o.top<target.top;});
+   if(j.updateBaseline)candidateRows.push(target.post);
+   candidateRows.push({_stopBoundary:true,id:j.updateStopId});
+  }
+ }
+ const deferred=j.deferredRows||[];j.deferredRows=[];
+ const r=await admitRows(j,deferred.concat(candidateRows));if(r.added){j.obstructionRecoveries=0;j.feedStallRecoveries=0;}
  j.note='Пакет '+j.batchNumber+': разведка '+j.discovered+'/'+j.options.maxPosts+'; завершено пакетов '+j.completedBatches+'; всего принято '+j.sessionPosts+'.';
- if(j.discovered>=j.options.maxPosts)await beginDeep(j,'достигнут размер пакета');
+ if(j.runMode==='update'&&j.updateBoundaryReached&&!j.discovered)return finishUpdate(j);
+ if(j.discovered>=j.options.maxPosts||j.runMode==='update'&&j.updateBoundaryReached)await beginDeep(j,j.updateBoundaryReached?'достигнута прежняя верхняя граница':'достигнут размер пакета');
  else if(j.steps>=j.options.maxSteps){
   const probe=await probeFeedState(feedId(j),j.group);
   if(probe.ok&&feedPositionPreserved(j,probe))await stall(j,'Достигнут лимит проходов, но живая feed-страница сохранена; checkpoint recovery не запускаю',{steps:j.steps,feed:probe},'discover');
@@ -386,13 +443,23 @@ async function exportComplete(msg){
   j.queue=retry;j.index=0;j.deepErrors=0;j.stage='stalled';j.paused=true;
   j.stall={at:new Date().toISOString(),reason:'JSON сохранён, но часть постов требует повторного Deep',resumeStage:'deep'};
   j.note='Неполный JSON сохранён. Checkpoint не сдвинут. Продолжить — повторить '+retry.length+' постов.';j.updatedAt=now();
-  await chrome.storage.local.set({[JOB_KEY]:j,[RECEIPT_KEY]:receipts});return j;
+  await setJob(j,{[RECEIPT_KEY]:receipts});return j;
+ }
+ const archives=await archiveMap();
+ if(j.archiveManaged){
+  let state=archives[j.group];if(state?.runs[j.id]?.status==='suspended')state=A.resume(state,j.id);if(!j.archiveRunStarted||!state?.runs[j.id])throw Error('Начало прохода не подтверждено');
+  const headCandidate=(j.headCandidates||[]).find(id=>order.includes(id))||null;
+  state=A.stage(state,{runId:j.id,batchId:key,ids:order,headCandidate,boundaryReached:j.updateBoundaryReached});
+  state=A.acknowledge(state,{runId:j.id,batchId:key,sha256:msg.sha256});
+  if(j.paused)state=A.suspend(state,j.id);archives[j.group]=state;j.archiveHead=state.head;j.archiveTail=state.tail;
  }
  const checkpoints=await getCheckpoints();
- if(j.lastCollectedPostId)checkpoints[j.group]={post_id:j.lastCollectedPostId,saved_at:new Date().toISOString(),source_job_id:j.id,batch_number:j.batchNumber,algorithm:CHECKPOINT_ALGORITHM,version:VERSION};
+ if(j.runMode!=='update'&&j.lastCollectedPostId)checkpoints[j.group]={post_id:j.lastCollectedPostId,saved_at:new Date().toISOString(),source_job_id:j.id,batch_number:j.batchNumber,algorithm:CHECKPOINT_ALGORITHM,version:VERSION};
  const allHistory=(await chrome.storage.local.get(HISTORY_KEY))[HISTORY_KEY]||{};
  allHistory[j.group]=[...new Set([...(allHistory[j.group]||[]),...order])].slice(-HISTORY_LIMIT);
- const count=order.length,boundary=j.lastCollectedPostId,wasPaused=Boolean(j.paused);j.completedBatches++;j.sessionPosts+=count;j.sessionDeepDone+=j.deepDone||0;j.sessionDeepErrors+=j.deepErrors||0;j.lastExport={at:new Date().toISOString(),batchNumber:j.batchNumber,downloadId:msg.downloadId??null,sha256:msg.sha256,filename:msg.filename||null,posts:count,boundary};j.batchNumber++;j.batchStartedAt=now();j.stage='discover';j.paused=wasPaused;j.steps=0;j.discovered=0;j.deepDone=0;j.deepErrors=0;j.queue=[];j.index=0;j.discoveryOrder=[];j.checkpointSeenIds=[];j.historyRejected=0;j.feedStallRecoveries=0;j.checkpointPostId=boundary;j.checkpointPending=false;j.checkpointFound=true;j.checkpointSource='live_session';j.liveBoundaryPostId=boundary;j.liveBoundaryPending=false;j.liveBoundaryScanSteps=0;j.resumeCount=(j.resumeCount||0)+1;j.deepPhase=null;j.currentId=null;j.note='Пакет '+(j.batchNumber-1)+' сохранён. '+(wasPaused?'Сессия остаётся на паузе.':'Продолжаю следующий пакет с живой позиции.');j.updatedAt=now();await chrome.storage.local.set({[JOB_KEY]:j,[CHECKPOINT_KEY]:checkpoints,[HISTORY_KEY]:allHistory,[RECEIPT_KEY]:receipts});historyCache.set(j.group,new Set(allHistory[j.group]));if(j.lastCollectedPostId)await setPageCheckpoint(feedId(j),j.group,j.lastCollectedPostId);await setPageHistory(feedId(j),j.group,allHistory[j.group]);if(!wasPaused)await resumeFeedAtLiveBoundary(j);return getJob();}
+ const count=order.length,boundary=j.lastCollectedPostId,wasPaused=Boolean(j.paused);j.completedBatches++;j.sessionPosts+=count;j.sessionDeepDone+=j.deepDone||0;j.sessionDeepErrors+=j.deepErrors||0;j.lastExport={at:new Date().toISOString(),batchNumber:j.batchNumber,downloadId:msg.downloadId??null,sha256:msg.sha256,filename:msg.filename||null,posts:count,boundary};j.batchNumber++;j.batchStartedAt=now();j.stage='discover';j.paused=wasPaused;j.steps=0;j.discovered=0;j.headCandidates=[];j.feedPinById={};j.deepDone=0;j.deepErrors=0;j.batchDeepTotal=0;j.queue=[];j.index=0;j.discoveryOrder=[];j.checkpointSeenIds=[];j.historyRejected=0;j.feedStallRecoveries=0;j.checkpointPostId=boundary;j.checkpointPending=false;j.checkpointFound=true;j.checkpointSource='live_session';j.liveBoundaryPostId=boundary;j.liveBoundaryPending=false;j.liveBoundaryScanSteps=0;j.resumeCount=(j.resumeCount||0)+1;j.deepPhase=null;j.currentId=null;j.note='Пакет '+(j.batchNumber-1)+' сохранён. '+(wasPaused?'Сессия остаётся на паузе.':'Продолжаю следующий пакет с живой позиции.');j.updatedAt=now();await setJob(j,{[CHECKPOINT_KEY]:checkpoints,[HISTORY_KEY]:allHistory,[RECEIPT_KEY]:receipts,[ARCHIVE_KEY]:archives});historyCache.set(j.group,new Set(allHistory[j.group]));if(j.runMode!=='update'&&j.lastCollectedPostId)await setPageCheckpoint(feedId(j),j.group,j.lastCollectedPostId);await setPageHistory(feedId(j),j.group,allHistory[j.group]);if(j.runMode==='update'&&j.updateBoundaryReached&&!j.deferredRows?.length)return finishUpdate(j);
+ if(j.deferredRows?.length){const deferred=j.deferredRows;j.deferredRows=[];await admitRows(j,deferred);await setJob(j);if(j.runMode==='update'&&j.updateBoundaryReached&&!j.discovered)return finishUpdate(j);if(j.discovered>=j.options.maxPosts||j.runMode==='update'&&j.updateBoundaryReached){if(wasPaused){j.readyForDeep=true;await setJob(j);}else await beginDeep(j,'сохранённый остаток предыдущего участка');return getJob();}}
+ if(!wasPaused)await resumeFeedAtLiveBoundary(j);return getJob();}
 async function exportFailed(msg){const j=await getJob();if(!j||j.stage!=='exporting')return {ignored:true};return stall(j,'Не удалось автоматически сохранить JSON-пакет',{batch:j.batchNumber,error:msg.error||null},'exporting');}
 let mutex=Promise.resolve();function serial(task){const next=mutex.then(task,task);mutex=next.catch(()=>{});return next;}
 chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{serial(async()=>{
@@ -405,21 +472,16 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{serial(async()=
   if(['discover','rewindResult','endDiscovery'].includes(msg.type)&&role!=='feed')return {ignored:true};
   if(['deepReady','deepExpanding','deepMismatch','deepSnapshot','deepError'].includes(msg.type)&&role!=='deep')return {ignored:true};
   if(msg.type==='obstructed'&&!role)return {ignored:true};
-  if(['start','resume','collectFound','pause','resetCheckpoint'].includes(msg.type))return {ignored:true};
+  if(['start','resume','collectFound','pause','resetCheckpoint','archiveStatus'].includes(msg.type))return {ignored:true};
  }
  switch(msg.type){
   case 'start':return start(msg);
   case 'pause':return pause();
   case 'resume':return resume(msg.tabId,msg.url);
   case 'collectFound':return collectFound(msg.tabId,msg.url);
-  case 'resetCheckpoint':{
-   const cur=await getJob(),group=msg.group||cur?.group;if(!group)throw Error('Группа не определена');
-   if(cur&&cur.group===group&&!cur.paused)throw Error('Сначала поставьте активную сессию на паузу');
-   await setCheckpoint(group,null);const ft=cur?.group===group?feedId(cur):null;if(ft){await setPageCheckpoint(ft,group,null);await clearHistory(group,ft);}else await clearHistory(group,null);
-   if(cur?.group===group){await clearGroup(group);cur.checkpointPostId=null;cur.checkpointPending=false;cur.checkpointFound=false;cur.lastCollectedPostId=null;cur.liveBoundaryPending=false;cur.liveBoundaryPostId=null;cur.discoveryOrder=[];cur.queue=[];cur.discovered=0;cur.index=0;cur.steps=0;cur.historyCount=0;cur.stage='discover';cur.paused=true;cur.note='Checkpoint и история ID сброшены. Для чистого старта откройте корень группы и нажмите «Начать».';await setJob(cur);}
-   return getJob();
-  }
+  case 'resetCheckpoint':throw Error('Архив и сохранённые границы не сбрасываются. Выберите режим сбора.');
   case 'status':return j;
+  case 'archiveStatus':return archiveFor(msg.group||j?.group);
   case 'rewindResult':return rewindResult(msg,sender);
   case 'discover':return discovered(msg,sender);
   case 'obstructed':return obstructed(msg,sender);

@@ -1,6 +1,6 @@
-ВНУТРЕННИЙ КАНДИДАТ, НЕ РЕЛИЗ
-Полный актуальный прогон: 26/26 тестовых файлов PASS. Staging watcher: 6/6 unit tests PASS.
-Отдельный Chromium: установленное расширение, настоящий JSON download, SHA256, checkpoint/receipt, сохранение IndexedDB и restart.
-Приватные реальные данные: два Bur JSON (70 постов/539 комментариев), старый экспорт 23 октября (363/5424/2793/386), два сохранённых DOM Facebook. Исходные файлы не включены в git.
-НЕ ПРОВЕРЕНО: авторизованный живой Facebook и полный long run. Двухграничное состояние НЕ подключено к worker/popup. Постоянный authors store/import mapping не завершены. Нового ZIP нет. Production не менялся.
-Подробности: ../../DEVELOPMENT-STATE.md и ../../LEGACY-COMPARISON.md
+ВНУТРЕННИЙ КАНДИДАТ — НЕ РЕЛИЗ
+Первый блок 89af2d7: 26/26 локальных tests PASS, watcher 6/6 PASS; все три GitHub CI success.
+Второй блок: подключены history/update, per-group head/tail, saved jobs, overflow/recovery/pinned safeguards. Новые Node integration/fault tests PASS. Native incremental smoke прошёл на диагностической копии (5-post raw + 1-post delta + no-change).
+Полный актуальный набор 31 test files на обычном исходнике ещё проверяется; до завершения не заявлять общий PASS.
+Реальный авторизованный Facebook, сортировка feed/comments и полнота Deep ещё не подтверждены. Нового ZIP нет. Production Supabase/WordPress и установленный watcher не менялись.
+Состояние и продолжение: ../../DEVELOPMENT-STATE.md

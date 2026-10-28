@@ -7,12 +7,10 @@ with tempfile.TemporaryDirectory() as tmp, sync_playwright() as p:
  shutil.copytree(root,extension)
  c=p.chromium.launch_persistent_context(str(profile),channel='chromium',headless=True,accept_downloads=True,args=[f'--disable-extensions-except={extension}',f'--load-extension={extension}'])
  w=c.service_workers[0] if c.service_workers else c.wait_for_event('serviceworker')
- for _ in range(100):
-  if w.evaluate('typeof chrome.storage!=="undefined"'):break
-  time.sleep(.05)
  extension_url=w.url.rsplit('/',1)[0]
- seeded=w.evaluate('''async()=>{
-  const job={id:'saved-session',sessionId:'saved-session',group:'backpackIL',feedTabId:999,stage:'exporting',batchNumber:3,completedBatches:2,sessionPosts:100,options:{maxPosts:53},discovered:53,steps:42,queue:Array.from({length:53},(_,i)=>String(i)),discoveryOrder:Array.from({length:53},(_,i)=>String(i)),deepDone:53,deepErrors:0,lastCollectedPostId:'52',checkpointPostId:'before'};
+ control=c.new_page();control.goto(extension_url+'/popup.html')
+ seeded=control.evaluate('''async()=>{
+  const job={id:'saved-session',sessionId:'saved-session',group:'backpackIL',feedTabId:999,stage:'exporting',paused:true,batchNumber:3,completedBatches:2,sessionPosts:100,options:{maxPosts:53},discovered:53,steps:42,queue:Array.from({length:53},(_,i)=>String(i)),discoveryOrder:Array.from({length:53},(_,i)=>String(i)),deepDone:53,deepErrors:0,lastCollectedPostId:'52',checkpointPostId:'before'};
   await chrome.storage.local.set({'burCollectorJob-v0520':job});
   const rows=Array.from({length:53},(_,i)=>({key:'backpackIL|post:'+String(i).padStart(3,'0'),group:'backpackIL',post_id:String(i),post_text:'saved '+i,comments:[{id:'c'+i,author:'Author',text:'Comment'}],deep:{status:'captured_unverified'}}));
   await new Promise((resolve,reject)=>{const req=indexedDB.open('bur-collector-v05',1);req.onupgradeneeded=()=>{const s=req.result.createObjectStore('posts',{keyPath:'key'});s.createIndex('group','group');};req.onerror=()=>reject(req.error);req.onsuccess=()=>{const db=req.result,tx=db.transaction('posts','readwrite');rows.forEach(row=>tx.objectStore('posts').put(row));tx.oncomplete=()=>{db.close();resolve();};tx.onerror=()=>reject(tx.error);};});

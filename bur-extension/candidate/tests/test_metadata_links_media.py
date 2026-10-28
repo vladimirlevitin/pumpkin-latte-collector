@@ -24,6 +24,10 @@ with sync_playwright() as p:
  def card():
   return page.evaluate("FBBurCore.extractCard(document.querySelector('#post'),'another-group','https://www.facebook.com/groups/another-group/')")
  row=card()
+ assert row['is_pinned'] is False
+ page.evaluate("()=>{const pin=document.createElement('span');pin.id='pin';pin.setAttribute('aria-label','Закреплённая публикация');document.querySelector('#post').prepend(pin)}")
+ assert card()['is_pinned'] is True
+ page.locator('#pin').evaluate('(el)=>el.remove()')
  assert row['author']=='Автор Поста',row
  assert row['author_url']=='https://www.facebook.com/profile.php?id=12345678'
  assert row['published_at']=='2026-10-28T07:30:00.000Z',row

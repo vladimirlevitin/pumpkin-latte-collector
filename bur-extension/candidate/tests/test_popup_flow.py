@@ -12,7 +12,7 @@ with sync_playwright() as p:
  window.chrome={runtime:{getManifest:()=>({version_name:'0.5.19-alpha'}),sendMessage:async(msg)=>{
  window.calls.push(msg.type);
  if(msg.type==='status')return result(window.job);
- if(msg.type==='start'){window.lastStart=msg;const g=new URL(msg.url).pathname.split('/')[2];window.job={group:g,tabId:5,stage:'discover',discovered:0,deepDone:0,deepErrors:0,queue:[],steps:0,options:{maxPosts:20},paused:false};return result(window.job);}
+ if(msg.type==='start'){window.lastStart=msg;const g=new URL(msg.url).pathname.split('/')[2];window.job={group:g,runMode:msg.mode||'history',tabId:5,stage:'discover',discovered:0,deepDone:0,deepErrors:0,queue:[],steps:0,options:{maxPosts:20},paused:false};return result(window.job);}
  if(msg.type==='collectFound'){window.job.stage='deep';window.job.queue=['1','2','3'];window.job.paused=false;return result(window.job);}
  if(msg.type==='pause'){window.job.paused=true;return result(window.job);}
  if(msg.type==='resume'){window.job.paused=false;return result(window.job);}
@@ -29,6 +29,7 @@ with sync_playwright() as p:
  page.click('#start');page.wait_for_function("window.job && window.job.group==='pumpkinlatte'")
  assert page.evaluate("window.lastStart.replacePaused===true"),'paused foreign-group job must be replaced, not resumed'
  assert page.evaluate("window.calls.filter(x=>x==='resume').length")==0,'cross-group Start must never resume old job'
+ page.click('#pause');page.wait_for_function('window.job.paused');page.select_option('#mode','update');page.click('#start');page.wait_for_function("window.job.runMode==='update'");assert page.evaluate("window.lastStart.mode==='update'")
  page.click('#export');page.wait_for_function("window.calls.includes('exportTab')")
  assert 'Gemini' not in page.content()
  print('PASS: popup buttons: Start->discover, Collect->deep with NO second Resume, Pause, Export')
