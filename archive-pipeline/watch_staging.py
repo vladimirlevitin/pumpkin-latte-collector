@@ -9,6 +9,7 @@ from verified_import import Client,import_batch,target
 
 class Watcher:
  def __init__(self,directory,state,client,index=False,node='node'):
+  target(client.base)
   self.directory=Path(directory);self.state=Path(state);self.client=client;self.index=index;self.node=node
   self.observed={};self.done={};self.retry={}
   if self.state.exists():self.done=json.loads(self.state.read_text(encoding='utf-8'))
@@ -26,7 +27,8 @@ class Watcher:
      self.observed[str(file)]=signature;continue
     if self.retry.get(str(file),0)>time.monotonic():continue
     digest=hashlib.sha256(file.read_bytes()).hexdigest();key=self.client.base+'|'+digest
-    if self.done.get(key,{}).get('ready'):continue
+    previous=self.done.get(key,{})
+    if previous.get('ready') and (not self.index or previous.get('index_ready')):continue
     receipt=import_batch(file,self.client,self.state.parent/'receipts')
     if receipt['sha256']!=digest:raise ValueError('file changed during scan')
     # Do not index a file that was edited after the exact imported bytes were read.
@@ -38,6 +40,7 @@ class Watcher:
      if indexed.returncode:raise RuntimeError('index worker failed; import receipt retained')
      status=json.loads(indexed.stdout);result['index_ready']=status.get('ready') is True;result['ready']=result['index_ready']
      if not result['ready']:self.retry[str(file)]=time.monotonic()+60
+    if hashlib.sha256(file.read_bytes()).hexdigest()!=digest:raise ValueError('file changed during indexing')
     self.done[key]=result;self.save();outcomes.append({'file':file.name,**result})
    except (ValueError,RuntimeError,OSError,subprocess.TimeoutExpired) as error:
     self.retry[str(file)]=time.monotonic()+60

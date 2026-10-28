@@ -1,0 +1,6 @@
+ВНУТРЕННИЙ КАНДИДАТ, НЕ РЕЛИЗ
+Полный актуальный прогон: 26/26 тестовых файлов PASS. Staging watcher: 6/6 unit tests PASS.
+Отдельный Chromium: установленное расширение, настоящий JSON download, SHA256, checkpoint/receipt, сохранение IndexedDB и restart.
+Приватные реальные данные: два Bur JSON (70 постов/539 комментариев), старый экспорт 23 октября (363/5424/2793/386), два сохранённых DOM Facebook. Исходные файлы не включены в git.
+НЕ ПРОВЕРЕНО: авторизованный живой Facebook и полный long run. Двухграничное состояние НЕ подключено к worker/popup. Постоянный authors store/import mapping не завершены. Нового ZIP нет. Production не менялся.
+Подробности: ../../DEVELOPMENT-STATE.md и ../../LEGACY-COMPARISON.md

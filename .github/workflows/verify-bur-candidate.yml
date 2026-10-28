@@ -1,0 +1,25 @@
+name: Verify unreleased Bur candidate
+on:
+  push:
+    branches: [fix/bur-comprehensive-regressions]
+  pull_request:
+    paths: ['bur-extension/candidate/**','archive-pipeline/watch_staging.py','archive-pipeline/test_watcher.py','.github/workflows/verify-bur-candidate.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install playwright==1.55.0
+      - run: python -m playwright install --with-deps chromium
+      - run: python bur-extension/candidate/run-tests.py
+      - run: python archive-pipeline/test_watcher.py
