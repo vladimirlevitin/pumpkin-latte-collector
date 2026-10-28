@@ -1,0 +1,25 @@
+import {createHandler} from './archive-api/handler.mjs';
+import assert from 'node:assert/strict';
+const env={SUPABASE_URL:'https://staging.example',SUPABASE_SERVICE_ROLE_KEY:'server-test-key',ALLOWED_ORIGIN:'https://portal.example'};
+let calls=[],mode='ok';
+const fetcher=async(url,args)=>{
+ calls.push({url,args});
+ if(url.endsWith('/auth/v1/user'))return Response.json(mode==='bad_auth'?{}:{id:'00000000-0000-0000-0000-000000000100'},{status:mode==='bad_auth'?401:200});
+ if(url.endsWith('/bur_archive_authorized'))return Response.json(mode!=='denied');
+ if(url.includes('googleapis'))return Response.json({error:'unavailable'},{status:503});
+ if(mode==='denied')return Response.json({code:'42501'},{status:403});
+ return Response.json({group:'one',results:[],semantic_used:false});
+};
+const handler=createHandler({env,fetcher});
+const req=(body={},token='token',origin=env.ALLOWED_ORIGIN)=>new Request('https://api.example/search',{method:'POST',headers:{origin,'content-type':'application/json',...(token?{authorization:'Bearer '+token}:{})},body:JSON.stringify({group:'one',query:'camping',...body})});
+assert.equal((await handler(req({},''))).status,401);assert.equal(calls.length,0);
+assert.equal((await handler(req({},'token','https://evil.example'))).status,403);assert.equal(calls.length,0);
+mode='bad_auth';assert.equal((await handler(req())).status,401);assert.equal(calls.length,1);
+mode='ok';const result=await handler(req());assert.equal(result.status,200);assert.equal((await result.json()).warning,'semantic_not_configured_using_keywords');
+const rpc=JSON.parse(calls.at(-1).args.body);assert.equal(rpc.p_user_id,'00000000-0000-0000-0000-000000000100');
+mode='denied';assert.equal((await handler(req({user_id:'attacker'}))).status,403);
+mode='ok';env.GEMINI_API_KEY='provider-test-key';const fallback=await handler(req());assert.equal((await fallback.json()).warning,'semantic_unavailable_using_keywords');
+const blocked=createHandler({env:{...env,SUPABASE_URL:'https://ltznpjfnkpydautbsrej.supabase.co'},fetcher});
+const count=calls.length;assert.equal((await blocked(req())).status,503);assert.equal(calls.length,count);
+assert.equal((await handler(req({query:'a'.repeat(2001)}))).status,400);
+console.log('PASS API: verified Auth user, no trusted client identity, group denial, CORS, keyword fallback, production guard');

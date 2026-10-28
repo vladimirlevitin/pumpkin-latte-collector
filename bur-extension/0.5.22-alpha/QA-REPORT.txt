@@ -1,0 +1,21 @@
+QA — 0.5.22-alpha
+Canonical baseline: c8fde0187dc7b0f845250114bfda042c060fb8f4.
+Baseline full regression: 17/17 PASS.
+Candidate full regression: 21/21 PASS.
+Chromium 140 / Playwright 1.55.0 / Windows / Python 3.12 / Node 24.
+Real fresh extension installation + toolbar popup + Start + persisted job +
+reload + resume + exact checkpoint + browser profile restart + same ID: PASS.
+Virtualized 4000-card simulator: target 3217, delayed renders, shuffled IDs,
+overshoot/backtrack, pause/resume and absent target: PASS.
+Worker: 2100 observations, missing/offscreen target, pause/service-worker reload,
+no 36-step bypass, exact boundary, group isolation: PASS.
+Existing tests cover structured/nested replies, modal handling, long exports,
+IndexedDB, separate deep tab and continuous batches.
+Release invariant test confirms protected collector components unchanged.
+
+NOT VERIFIED: authorized live Facebook long-run/checkpoint/deep of 0.5.22,
+completeness of actual Facebook data, throughput on the real dynamic feed.
+The separate staging backend is not deployed and is not part of this extension.
+Initial test-environment failures (Playwright dependency/browser not installed,
+Windows EBUSY during installation, opening popup as a normal tab) were corrected;
+final full runs passed without changing the working popup/start mechanism.
