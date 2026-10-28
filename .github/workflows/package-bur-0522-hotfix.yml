@@ -2,6 +2,8 @@ name: Verify and package Bur 0.5.22 hotfix
 on:
   push:
     branches: [fix/bur-0522-first-card-and-metadata]
+  pull_request:
+    paths: ['bur-extension/0.5.22-alpha/**','.github/workflows/package-bur-0522-hotfix.yml']
   workflow_dispatch:
 permissions:
   contents: read
