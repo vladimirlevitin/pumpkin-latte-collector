@@ -142,7 +142,7 @@ async function deep(job){
  try{
   job=await send('deepExpanding',{id:expected});
   if(!job||job.deepPhase!=='EXPANDING')return;
-  let combined=null,expanded=0,scrolled=0,unchanged=0,supplemental=[],settled=false;
+  let combined=null,expanded=0,scrolled=0,unchanged=0,supplemental=[],settled=false,commentSort={status:'not_exposed',verified:false};
   const MAX_DETAIL_CYCLES=32;
   for(let i=0;i<MAX_DETAIL_CYCLES;i++){
    const refreshed=await send('status');if(!refreshed||refreshed.paused||refreshed.stage!=='deep'||refreshed.queue[refreshed.index]!==expected||refreshed.deepPhase==='NAVIGATING')return;
@@ -150,6 +150,15 @@ async function deep(job){
    const nodes=C.postNodes(document,null,{includeDialog:Boolean(modalRoot)}).filter(n=>!modalRoot||modalRoot.contains(n));
    const fallback=C.permalinkPostRoot(document,job.group,location.href);
    const sourceNodes=nodes.length?nodes:modalRoot?[modalRoot]:fallback?[fallback]:[];
+   if(i===0){
+    commentSort=await C.ensureAllComments(modalRoot||sourceNodes[0],{wait:delay,stopped:async()=>{const current=await send('status');return !current||current.id!==job.id||current.paused||current.stage!=='deep'||current.queue?.[current.index]!==expected;}});
+    if(commentSort.paused)return;
+    if(commentSort.known_incomplete){
+     for(const row of currentCards(job.group,{includeDialog:Boolean(modalRoot),modalRoot}).filter(p=>p.post_id===expected))combined=C.mergePosts(combined,row,job.group);
+     combined=combined||{group:job.group,post_id:expected,permalink:C.canonicalUrl(job.group,expected),post_text:'',comments:[],collector:C.collector};
+     await send('deepPassEnd',{id:expected,post:combined,scrolled,expanded,coverage:{settled:true,known_incomplete:true,comment_sort:commentSort,total_completeness:'unknown'}});return;
+    }
+   }
    const dialogsBefore=new Set(F.visibleDialogs(document,window).map(x=>x.el));
    // One deep expansion per cycle. This avoids clicking several reply controls before
    // Facebook has finished opening the first thread UI.
@@ -192,7 +201,7 @@ async function deep(job){
   const finalNodes=C.postNodes(document,null,{includeDialog:Boolean(finalModal)}).filter(n=>(!finalModal||finalModal.contains(n))&&C.extractCard(n,job.group,location.href)?.post_id===expected);
   if(!finalNodes.length){const root=C.permalinkPostRoot(document,job.group,location.href);if(root&&C.extractCard(root,job.group,location.href)?.post_id===expected)finalNodes.push(root);}
   const remaining=C.expandVisible(finalNodes,Number.MAX_SAFE_INTEGER,'deep',true);
-  const coverage={settled,remaining_controls:remaining,known_incomplete:remaining>0,total_completeness:'unknown'};
+  const coverage={settled,remaining_controls:remaining,known_incomplete:remaining>0,comment_sort:commentSort,total_completeness:'unknown'};
   if(!settled||coverage.known_incomplete){await send('deepPassEnd',{id:expected,post:combined,scrolled,expanded,coverage});return;}
   await send('deepSnapshot',{post:combined,scrolled,expanded,coverage});
  }catch(e){try{await send('deepError',{id:expected,error:String(e.message||e)});}catch{}}

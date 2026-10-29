@@ -502,6 +502,44 @@
       comments,...metadata,is_pinned:isPinned(observedNode)||isPinned(node),links:extractLinks(bodyNode||node,node,link.url),source_page:loc||'',snapshot_at:new Date().toISOString(),collector,
       warning:comments.length?'Only already visible comments; thread completeness unknown.':'No separately extracted visible comments; completeness unknown.'},group);
   }
-  return {uniqueMedia,collector,clean,hash,idFromPermalink,canonicalUrl,textQuality,truncated,
+  // Only manipulate a sorting menu whose relationship to this post is visible.
+  // A missing selector does not establish that Facebook exposed every comment.
+  async function ensureAllComments(root,{wait=ms=>new Promise(r=>setTimeout(r,ms)),stopped=async()=>false}={}){
+    if(!root)return {status:'not_exposed',verified:false};
+    const doc=root.ownerDocument,view=doc.defaultView;
+    const visible=el=>{if(!el?.isConnected||el.closest('[aria-hidden="true"]'))return false;const s=view.getComputedStyle(el),r=el.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)!==0&&r.width>0&&r.height>0;};
+    const label=el=>clean(el.getAttribute('aria-label')||el.innerText||el.textContent||'');
+    const all=/^(?:All comments|Все комментарии|כל התגובות)$/iu;
+    const sorted=/^(?:Most relevant|Top comments|Newest|Наиболее актуальные|Самые актуальные|Сначала новые|הרלוונטיות ביותר|החדשות ביותר)$/iu;
+    const sortControls=()=>[...root.querySelectorAll('button,[role="button"]')].filter(el=>visible(el)&&el.getAttribute('aria-haspopup')==='menu'&&(all.test(label(el))||sorted.test(label(el))));
+    const controls=sortControls();
+    if(!controls.length)return {status:'not_exposed',verified:false};
+    if(controls.length!==1)return {status:'ambiguous_control',verified:false,known_incomplete:true};
+    const control=controls[0],before=label(control);
+    if(all.test(before))return {status:'already_all',verified:true,label:before};
+    if(await stopped())return {status:'paused',verified:false,paused:true};
+    const menus=()=>[...doc.querySelectorAll('[role="menu"],[role="listbox"]')].filter(visible);
+    const prior=new Set(menus());
+    // An already open menu may belong to the user or another component.
+    if(control.getAttribute('aria-expanded')==='true')return {status:'preexisting_menu',verified:false,known_incomplete:true};
+    control.click();await wait(450);
+    const closeOwn=()=>{if(control.isConnected&&control.getAttribute('aria-expanded')==='true')control.click();};
+    const fail=(status,extra={})=>{closeOwn();return {status,verified:false,known_incomplete:true,...extra};};
+    if(await stopped())return fail('paused',{paused:true});
+    const id=control.getAttribute('aria-controls'),linked=id?doc.getElementById(id):null;
+    const fresh=menus().filter(el=>!prior.has(el));
+    const candidates=linked&&fresh.includes(linked)?[linked]:id?[]:fresh;
+    if(candidates.length!==1)return fail('unowned_menu');
+    const menu=candidates[0];
+    const options=[...menu.querySelectorAll('[role="menuitem"],[role="menuitemradio"],[role="option"],button')].filter(el=>visible(el)&&all.test(label(el)));
+    if(options.length!==1)return fail('missing_all_option');
+    const option=options[0];option.click();await wait(450);
+    if(await stopped())return fail('paused',{paused:true});
+    const after=sortControls();
+    const verified=after.length===1&&all.test(label(after[0]))||visible(option)&&(option.getAttribute('aria-checked')==='true'||option.getAttribute('aria-selected')==='true');
+    if(!verified)closeOwn();
+    return {status:verified?'selected_all':'selection_unconfirmed',verified:Boolean(verified),known_incomplete:!verified,previous_label:before,label:after.length===1?label(after[0]):null};
+  }
+  return {ensureAllComments,uniqueMedia,collector,clean,hash,idFromPermalink,canonicalUrl,textQuality,truncated,
     parseDateEvidence,normalizePost,mergePosts,postNodes,extractCard,extractVisibleComments,expandVisible,permalinkPostRoot};
 });

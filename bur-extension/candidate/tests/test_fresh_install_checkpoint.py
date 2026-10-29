@@ -12,12 +12,14 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp,sync_playwri
  ctx.route('https://www.facebook.com/**',lambda route:route.fulfill(body=html,content_type='text/html'))
  worker=ctx.service_workers[0] if ctx.service_workers else ctx.wait_for_event('serviceworker')
  base=worker.url.rsplit('/',1)[0]
+ control=ctx.new_page();control.goto(base+'/export.html?manual=1')
+ print('setup: installed extension control ready',flush=True)
  page=ctx.new_page();page.goto(feed)
  page.wait_for_timeout(1200)
  cdp=ctx.browser.new_browser_cdp_session()
  def open_popup():
   page.bring_to_front()
-  worker.evaluate("()=>{void chrome.action.openPopup();return true}")
+  control.evaluate("()=>{void chrome.action.openPopup();return true}")
   page.wait_for_timeout(500)
   targets=cdp.send('Target.getTargets')['targetInfos']
   chosen=next(x for x in targets if x['url']==base+'/popup.html')
@@ -40,19 +42,20 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp,sync_playwri
    return response.get('result',{}).get('result',{}).get('value')
   return evaluate
  def get_job():
-  return worker.evaluate("async()=> (await chrome.storage.local.get('burCollectorJob-v0520'))['burCollectorJob-v0520']")
+  return control.evaluate("async()=> (await chrome.storage.local.get('burCollectorJob-v0520'))['burCollectorJob-v0520']")
  def until(predicate,seconds=30):
   for _ in range(seconds*5):
    state=get_job()
    if predicate(state):return state
    page.wait_for_timeout(200)
   raise AssertionError('state timeout: '+json.dumps(get_job()))
+ print('setup: opening actual toolbar popup',flush=True)
  pe=open_popup()
  manifest=pe('chrome.runtime.getManifest()')
  assert manifest['version_name']=='0.5.23-alpha'
  assert pe("document.querySelector('#status').innerText.includes('Нет задания')")
- tabid=worker.evaluate("async()=> (await chrome.tabs.query({})).find(x=>x.url==='https://www.facebook.com/groups/backpackIL/').id")
- ping=worker.evaluate('(id)=>chrome.tabs.sendMessage(id,{type:"burPing"})',tabid)
+ tabid=control.evaluate("async()=> (await chrome.tabs.query({})).find(x=>x.url==='https://www.facebook.com/groups/backpackIL/').id")
+ ping=control.evaluate('(id)=>chrome.tabs.sendMessage(id,{type:"burPing"})',tabid)
  assert ping['version']==manifest['version_name']
  pe("document.querySelector('#startAfter').value='"+cp+"';document.querySelector('#maxPosts').value='5';document.querySelector('#start').click()")
  saved=until(lambda x:x and x.get('checkpointPostId')==cp)
@@ -61,7 +64,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp,sync_playwri
  # Reopening the toolbar popup is the normal operator flow after feed reload.
  pe=open_popup();pe("document.querySelector('#pause').click()")
  saved=until(lambda x:x and x.get('paused'))
- session=saved['id'];page.reload()
+ session=saved['id'];print('checkpoint: paused persisted',flush=True);page.reload()
  pe=open_popup()
  assert pe("document.querySelector('#status').innerText.includes('"+cp+"')")
  pe("document.querySelector('#startAfter').value='';document.querySelector('#start').click()")
@@ -77,7 +80,9 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp,sync_playwri
  ctx=p.chromium.launch_persistent_context(tmp,channel='chromium',headless=True,args=[f'--disable-extensions-except={root}',f'--load-extension={root}'])
  worker=ctx.service_workers[0] if ctx.service_workers else ctx.wait_for_event('serviceworker')
  assert worker.url.rsplit('/',1)[0]==base
- state=worker.evaluate("async()=> (await chrome.storage.local.get('burCollectorJob-v0520'))['burCollectorJob-v0520']")
+ control=ctx.new_page();control.goto(base+'/export.html?manual=1')
+ print('restart: extension control ready',flush=True)
+ state=control.evaluate("async()=> (await chrome.storage.local.get('burCollectorJob-v0520'))['burCollectorJob-v0520']")
  assert state['id']==session and state['checkpointPostId']==cp and state['checkpointFound']
  ctx.close()
 print('PASS fresh install + aligned ping + actual popup Start + persistence + page reload + resume + exact checkpoint + profile restart, same extension ID')
