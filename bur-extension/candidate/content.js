@@ -208,7 +208,7 @@ async function deep(job){
      warning:'Deep DOM card unavailable; preserved discovery record and merged any visible comments.'};
    // Structural-only diagnostics: no post text, author names, URLs or DOM HTML leave the page.
    const diagnostic={
-    reason:'permalink_card_unresolved',expected_id_matches_url:C.idFromPermalink?C.idFromPermalink(location.href,job.group)===expected:true,
+    reason:'permalink_card_unresolved',
     article_count:document.querySelectorAll('[role="article"]').length,
     feed_unit_count:document.querySelectorAll('[data-pagelet^="FeedUnit_"]').length,
     post_body_count:document.querySelectorAll('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"]').length,
