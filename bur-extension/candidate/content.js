@@ -206,7 +206,17 @@ async function deep(job){
    combined={group:job.group,post_id:expected,permalink:C.canonicalUrl(job.group,expected),
      post_text:'',comments:supplemental,collector:C.collector,
      warning:'Deep DOM card unavailable; preserved discovery record and merged any visible comments.'};
-   await send('deepSnapshot',{post:combined,scrolled,expanded,fallback:'url_identity_existing_discovery'});
+   // Structural-only diagnostics: no post text, author names, URLs or DOM HTML leave the page.
+   const diagnostic={
+    reason:'permalink_card_unresolved',
+    article_count:document.querySelectorAll('[role="article"]').length,
+    feed_unit_count:document.querySelectorAll('[data-pagelet^="FeedUnit_"]').length,
+    post_body_count:document.querySelectorAll('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"]').length,
+    detail_dialog_present:Boolean(F.detailDialog(document,window)),
+    candidate_count:C.postNodes(document,null,{includeDialog:Boolean(F.detailDialog(document,window))}).length,
+    observed_cycles:MAX_DETAIL_CYCLES,scrolled,expanded
+   };
+   await send('deepSnapshot',{post:combined,scrolled,expanded,fallback:'url_identity_existing_discovery',coverage:{diagnostic}});
    return;
   }
   const finalModal=F.detailDialog(document,window);
