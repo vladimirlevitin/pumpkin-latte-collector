@@ -2,7 +2,21 @@
 
 Статус: работа идёт; релиз не собран и не заявлен готовым.
 
+## Подтверждённые пользователем границы — 29 октября
+
+Медиа: пока только ссылки, принадлежность и метаданные; сами файлы не скачивать. Периодическое пополнение: пока только новые посты и их комментарии, без повторного досбора обсуждений старых постов. Не добавлять скрытую повторную обработку старых записей в режиме update. Legacy bridge остаётся отдельной миграционной задачей для состояния без head.
+
 ## Продолжение 29 октября — две границы подключены, проверка продолжается
+
+### Третий блок — короткие/медийные посты и new-only update
+
+Короткие публикации с точным собственным post permalink больше не теряются из-за порога 35 символов. Публикация с одним фото сохраняет пустой post_text и quality=media_only, исходная карточка остаётся отдельно. Ссылки preview без body selector сохраняются. Post ID не берётся из цитируемого поста в тексте или из nested comment permalink; для standalone permalink допускается прежняя проверенная URL fallback. FeedUnit с одним явно идентифицированным primary article поддержан без переноса чужих comment IDs.
+
+Video с blob src сохраняется как metadata evidence: url=null, temporary_url, source_url владельца, poster, availability=temporary_blob_only. Это НЕ постоянная ссылка и НЕ сохранённый видеофайл. Разделение post/comment media и объединение повторных снимков проверены fixture-тестом. Бинарные медиа не скачиваются согласно ответу пользователя.
+
+Update теперь исключает старые post IDs только по подтверждённым экспортным квитанциям (retained + SHA256 + incomplete=false). Legacy history, где ID мог быть лишь увиден до checkpoint, не считается доказательством выгрузки. Старое обсуждение, поднятое выше head, не попадает в Deep и не перезаписывается. Добавлены Unicode-имена авторов (включая арабские/китайские) при явном profile evidence.
+
+Новые тесты test_small_media_posts.py и test-update-new-only.js PASS; повторены metadata/comments/nested/permalink/modal/content integration tests. Два приватных Bur JSON сохраняют 70 постов/539 комментариев; два настоящих DOM-снимка дают те же 30 постов/43 комментария, что до изменения. Полный набор теперь 33 test files; итоговая CI-проверка третьего блока ещё требуется. Не выдавать ZIP по одним targeted tests.
 
 Первый блок сохранён в Google Drive: https://drive.google.com/file/d/1gcPM5O0D3pMB2FvQCqQzMuslACGNlgP3/view . Папка OpenAI / Эстафета между чатами, ID 1nZ_0Pm4Q4w0XVdhdABmUhBMpNljB729u. Полная копия в docs/handoffs/BUR-2026-10-28-phase1.txt. Все три CI первого блока 89af2d7 завершились success, включая candidate и прежнюю archive pipeline.
 
@@ -10,7 +24,7 @@
 
 Исправлены overflow между пакетами, сохранность draft snapshots после reload/перестановки DOM, повторное подключение paused job в новой вкладке, атомарный отказ commit, выбор head с исключением явно закреплённых публикаций. Доказательство pinned берётся из feed-снимка; отсутствие badge на permalink в Deep его не отменяет. Pinned-копия старого head не завершает update. Удалена кнопка сброса архива/границ. Исправлен общий счётчик Deep при повторной обработке failed posts.
 
-Новые Node-тесты integration/overflow/group isolation/restart, pinned boundaries, recovery drafts и storage commit failure PASS. Сквозной installed test прошёл на диагностической копии: настоящий сбор 5 постов, Deep, download/SHA256, затем delta 1 пост и no-change pass при неизменном tail. Но диагностическая копия НЕ равна итоговому подтверждению exact source. Повтор полного набора на обычном исходнике идёт; встречено зависание раннего обращения теста к cold service worker. Драйвер переведён на extension page, команды выполняются в видимом control context. burWake теперь явно подтверждает получение сообщения. На момент записи полного PASS для второго блока ещё НЕ заявляем.
+Новые Node-тесты integration/overflow/group isolation/restart, pinned boundaries, recovery drafts и storage commit failure PASS. Сквозной installed test прошёл на диагностической копии: настоящий сбор 5 постов, Deep, download/SHA256, затем delta 1 пост и no-change pass при неизменном tail. Но диагностическая копия НЕ равна итоговому подтверждению exact source. Повтор полного набора на обычном исходнике идёт; встречено зависание раннего обращения теста к cold service worker. Драйвер переведён на extension page, команды выполняются в видимом control context. burWake теперь явно подтверждает получение сообщения. Для коммита 8cad162d7870e738551f874855fd960789f35761 все три GitHub CI завершились success, включая полный набор 31 test files и прежнюю archive pipeline. Прогоны: 40770029384, 40770022445, 40770029326. Native installed incremental test на обычном исходнике в Windows также завершился PASS; итоговый локальный runner ещё допечатывает остальные тесты.
 
 Следующий шаг: завершить полный набор 31 test files на exact head (локально и CI), разобраться с зависанием Windows fixture driver; затем полнота Deep, сортировка ленты/комментариев, media-only посты, video blob evidence и изолированный импорт mode-aware author graph. Истинный live Facebook не проверен; достижение одного ID в ранжированной ленте само по себе не доказывает полноту новых постов. ZIP не выпускать.
 

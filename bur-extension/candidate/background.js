@@ -3,7 +3,7 @@ importScripts('core.js','archive-state.js');
 const C=globalThis.FBBurCore,A=globalThis.FBBurArchive;
 const DB='bur-collector-v05', DBVER=1,JOB_KEY='burCollectorJob-v0520',CHECKPOINT_KEY='burCollectorCheckpoints-v0520',HISTORY_KEY='burCollectorHistory-v0520',RECEIPT_KEY='burCollectorExportReceipts-v1',ARCHIVE_KEY='burCollectorArchives-v1',SAVED_JOB_KEY='burCollectorSavedJobs-v1',ALARM='bur-collector-watchdog';
 const VERSION='0.5.23-alpha',CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
-const historyCache=new Map();
+const historyCache=new Map(),confirmedCache=new Map();
 const DEFAULTS={maxPosts:50,maxSteps:15000};
 function groupOf(url){try{const u=new URL(url);if(!['www.facebook.com','web.facebook.com'].includes(u.hostname))return null;return decodeURIComponent(u.pathname.match(/^\/groups\/([^/]+)/)?.[1]||'')||null;}catch{return null;}}
 function postIdOf(url,group){return C.idFromPermalink(url,group);}
@@ -96,10 +96,17 @@ function rememberCheckpointSeen(j,ids){
  if(arr.length>HISTORY_LIMIT)arr.splice(0,arr.length-HISTORY_LIMIT);
  j.checkpointSeenIds=arr;
 }
+async function confirmedFor(group){
+ if(confirmedCache.has(group))return confirmedCache.get(group);
+ const receipts=(await chrome.storage.local.get(RECEIPT_KEY))[RECEIPT_KEY]||{},ids=new Set();
+ for(const [key,receipt] of Object.entries(receipts))if((receipt.group===group||!receipt.group&&key.startsWith(group+'|'))&&receipt.retained&&!receipt.incomplete&&/^[a-f0-9]{64}$/.test(receipt.sha256||''))for(const id of receipt.ids||[])ids.add(String(id));
+ confirmedCache.set(group,ids);return ids;
+}
 async function admitRows(j,rows){
  const blocked=new Set((Array.isArray(j.checkpointSeenIds)?j.checkpointSeenIds:[]).map(String));
  if(j.checkpointPostId)blocked.add(String(j.checkpointPostId));
  const historical=await historyFor(j.group,j.feedTabId??j.tabId);
+ const confirmed=j.runMode==='update'?await confirmedFor(j.group):null;
  const order=Array.isArray(j.discoveryOrder)?j.discoveryOrder.map(String):[],known=new Set(order),batchSeen=new Set();
  const eligible=[],newIds=[];let historyRejected=0,remaining=Math.max(0,(j.options?.maxPosts||0)-order.length);
  const source=rows||[];
@@ -108,6 +115,7 @@ async function admitRows(j,rows){
   if(raw?.group&&raw.group!==j.group)continue;
   if(raw?._stopBoundary){j.updateBoundaryReached=true;j.updateBoundaryFoundAt=new Date().toISOString();break;}
   const id=String(raw?.post_id||'');if(!id||blocked.has(id)&&!raw._burRetainedDraft||batchSeen.has(id))continue;batchSeen.add(id);
+  if(!raw._burRetainedDraft&&confirmed?.has(id)&&!known.has(id)){historyRejected++;continue;}
   if(!raw._burRetainedDraft&&j.runMode!=='update'&&historical.has(id)&&!known.has(id)){historyRejected++;continue;}
   if(!known.has(id)){if(remaining<=0){j.deferredRows=(j.deferredRows||[]).concat(source.slice(rowIndex));break;}known.add(id);order.push(id);newIds.push(id);remaining--;}
   j.feedPinById||={};if(!(id in j.feedPinById))j.feedPinById[id]=raw.is_pinned===true;
@@ -435,7 +443,7 @@ async function exportComplete(msg){
  const key=j.group+'|'+j.id+'|'+j.batchNumber;
  if(receipts[key]&&receipts[key].sha256!==msg.sha256&&!receipts[key].incomplete)throw Error('Контрольная сумма пакета изменилась');
  const previousReceipt=receipts[key]||null;
- receipts[key]={sha256:msg.sha256,downloadId:msg.downloadId,filename:downloaded.filename||msg.filename,retained:true,import_verified:false,incomplete:Boolean(j.deepErrors),ids:order,at:new Date().toISOString(),previous:previousReceipt&&previousReceipt.sha256!==msg.sha256?previousReceipt:null};
+ receipts[key]={group:j.group,sha256:msg.sha256,downloadId:msg.downloadId,filename:downloaded.filename||msg.filename,retained:true,import_verified:false,incomplete:Boolean(j.deepErrors),ids:order,at:new Date().toISOString(),previous:previousReceipt&&previousReceipt.sha256!==msg.sha256?previousReceipt:null};
  if(j.deepErrors){
   const rows=await allPosts(j.group),failed=new Set(rows.filter(p=>p.deep?.status==='failed').map(p=>String(p.post_id)));
   const retry=order.filter(id=>failed.has(String(id)));
@@ -457,7 +465,7 @@ async function exportComplete(msg){
  if(j.runMode!=='update'&&j.lastCollectedPostId)checkpoints[j.group]={post_id:j.lastCollectedPostId,saved_at:new Date().toISOString(),source_job_id:j.id,batch_number:j.batchNumber,algorithm:CHECKPOINT_ALGORITHM,version:VERSION};
  const allHistory=(await chrome.storage.local.get(HISTORY_KEY))[HISTORY_KEY]||{};
  allHistory[j.group]=[...new Set([...(allHistory[j.group]||[]),...order])].slice(-HISTORY_LIMIT);
- const count=order.length,boundary=j.lastCollectedPostId,wasPaused=Boolean(j.paused);j.completedBatches++;j.sessionPosts+=count;j.sessionDeepDone+=j.deepDone||0;j.sessionDeepErrors+=j.deepErrors||0;j.lastExport={at:new Date().toISOString(),batchNumber:j.batchNumber,downloadId:msg.downloadId??null,sha256:msg.sha256,filename:msg.filename||null,posts:count,boundary};j.batchNumber++;j.batchStartedAt=now();j.stage='discover';j.paused=wasPaused;j.steps=0;j.discovered=0;j.headCandidates=[];j.feedPinById={};j.deepDone=0;j.deepErrors=0;j.batchDeepTotal=0;j.queue=[];j.index=0;j.discoveryOrder=[];j.checkpointSeenIds=[];j.historyRejected=0;j.feedStallRecoveries=0;j.checkpointPostId=boundary;j.checkpointPending=false;j.checkpointFound=true;j.checkpointSource='live_session';j.liveBoundaryPostId=boundary;j.liveBoundaryPending=false;j.liveBoundaryScanSteps=0;j.resumeCount=(j.resumeCount||0)+1;j.deepPhase=null;j.currentId=null;j.note='Пакет '+(j.batchNumber-1)+' сохранён. '+(wasPaused?'Сессия остаётся на паузе.':'Продолжаю следующий пакет с живой позиции.');j.updatedAt=now();await setJob(j,{[CHECKPOINT_KEY]:checkpoints,[HISTORY_KEY]:allHistory,[RECEIPT_KEY]:receipts,[ARCHIVE_KEY]:archives});historyCache.set(j.group,new Set(allHistory[j.group]));if(j.runMode!=='update'&&j.lastCollectedPostId)await setPageCheckpoint(feedId(j),j.group,j.lastCollectedPostId);await setPageHistory(feedId(j),j.group,allHistory[j.group]);if(j.runMode==='update'&&j.updateBoundaryReached&&!j.deferredRows?.length)return finishUpdate(j);
+ const count=order.length,boundary=j.lastCollectedPostId,wasPaused=Boolean(j.paused);j.completedBatches++;j.sessionPosts+=count;j.sessionDeepDone+=j.deepDone||0;j.sessionDeepErrors+=j.deepErrors||0;j.lastExport={at:new Date().toISOString(),batchNumber:j.batchNumber,downloadId:msg.downloadId??null,sha256:msg.sha256,filename:msg.filename||null,posts:count,boundary};j.batchNumber++;j.batchStartedAt=now();j.stage='discover';j.paused=wasPaused;j.steps=0;j.discovered=0;j.headCandidates=[];j.feedPinById={};j.deepDone=0;j.deepErrors=0;j.batchDeepTotal=0;j.queue=[];j.index=0;j.discoveryOrder=[];j.checkpointSeenIds=[];j.historyRejected=0;j.feedStallRecoveries=0;j.checkpointPostId=boundary;j.checkpointPending=false;j.checkpointFound=true;j.checkpointSource='live_session';j.liveBoundaryPostId=boundary;j.liveBoundaryPending=false;j.liveBoundaryScanSteps=0;j.resumeCount=(j.resumeCount||0)+1;j.deepPhase=null;j.currentId=null;j.note='Пакет '+(j.batchNumber-1)+' сохранён. '+(wasPaused?'Сессия остаётся на паузе.':'Продолжаю следующий пакет с живой позиции.');j.updatedAt=now();await setJob(j,{[CHECKPOINT_KEY]:checkpoints,[HISTORY_KEY]:allHistory,[RECEIPT_KEY]:receipts,[ARCHIVE_KEY]:archives});historyCache.set(j.group,new Set(allHistory[j.group]));confirmedCache.delete(j.group);if(j.runMode!=='update'&&j.lastCollectedPostId)await setPageCheckpoint(feedId(j),j.group,j.lastCollectedPostId);await setPageHistory(feedId(j),j.group,allHistory[j.group]);if(j.runMode==='update'&&j.updateBoundaryReached&&!j.deferredRows?.length)return finishUpdate(j);
  if(j.deferredRows?.length){const deferred=j.deferredRows;j.deferredRows=[];await admitRows(j,deferred);await setJob(j);if(j.runMode==='update'&&j.updateBoundaryReached&&!j.discovered)return finishUpdate(j);if(j.discovered>=j.options.maxPosts||j.runMode==='update'&&j.updateBoundaryReached){if(wasPaused){j.readyForDeep=true;await setJob(j);}else await beginDeep(j,'сохранённый остаток предыдущего участка');return getJob();}}
  if(!wasPaused)await resumeFeedAtLiveBoundary(j);return getJob();}
 async function exportFailed(msg){const j=await getJob();if(!j||j.stage!=='exporting')return {ignored:true};return stall(j,'Не удалось автоматически сохранить JSON-пакет',{batch:j.batchNumber,error:msg.error||null},'exporting');}

@@ -1,6 +1,6 @@
 ВНУТРЕННИЙ КАНДИДАТ — НЕ РЕЛИЗ
-Первый блок 89af2d7: 26/26 локальных tests PASS, watcher 6/6 PASS; все три GitHub CI success.
-Второй блок: подключены history/update, per-group head/tail, saved jobs, overflow/recovery/pinned safeguards. Новые Node integration/fault tests PASS. Native incremental smoke прошёл на диагностической копии (5-post raw + 1-post delta + no-change).
-Полный актуальный набор 31 test files на обычном исходнике ещё проверяется; до завершения не заявлять общий PASS.
-Реальный авторизованный Facebook, сортировка feed/comments и полнота Deep ещё не подтверждены. Нового ZIP нет. Production Supabase/WordPress и установленный watcher не менялись.
-Состояние и продолжение: ../../DEVELOPMENT-STATE.md
+Блок 1 / 89af2d7: 26 локальных тестов и три CI success.
+Блок 2 / 8cad162: 31/31 локальных тестовых файлов и три CI success. Native installed source: 5-post raw -> delta 1 -> no-change, head/tail, реальные downloads/SHA256, restart — PASS; Facebook заменён fixtures.
+Блок 3: media-only/link-only/preview/temporary-video metadata, Unicode authors, подтверждённый new-only filter. Targeted tests и сохранность реальных JSON/DOM PASS; полный актуальный набор 33 test files ещё должен пройти CI.
+НЕ ПОДТВЕРЖДЕНО: live Facebook, хронологическая сортировка ленты и полнота длинных веток Deep, изолированный mode-aware import/author graph. ZIP нет. Production и установленный watcher не менялись.
+См. ../../DEVELOPMENT-STATE.md

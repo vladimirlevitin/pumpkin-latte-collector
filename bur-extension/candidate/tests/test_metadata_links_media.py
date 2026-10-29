@@ -22,7 +22,7 @@ with sync_playwright() as p:
  b=p.chromium.launch(headless=True)
  page=b.new_page();page.set_content(html);page.evaluate((root/'core.js').read_text(encoding='utf-8'))
  def card():
-  return page.evaluate("FBBurCore.extractCard(document.querySelector('#post'),'another-group','https://www.facebook.com/groups/another-group/')")
+  return page.evaluate("FBBurCore.extractCard(document.querySelector('#post'),'another-group','https://www.facebook.com/groups/another-group/posts/123456789/')")
  row=card()
  assert row['is_pinned'] is False
  page.evaluate("()=>{const pin=document.createElement('span');pin.id='pin';pin.setAttribute('aria-label','Закреплённая публикация');document.querySelector('#post').prepend(pin)}")
@@ -30,6 +30,10 @@ with sync_playwright() as p:
  page.locator('#pin').evaluate('(el)=>el.remove()')
  assert row['author']=='Автор Поста',row
  assert row['author_url']=='https://www.facebook.com/profile.php?id=12345678'
+ for name in ['王小明','أحمد محمد']:
+  page.locator('#post > h3 a').evaluate('(el,name)=>el.textContent=name',name)
+  assert card()['author']==name
+ page.locator('#post > h3 a').evaluate("el=>el.textContent='Автор Поста'")
  assert row['published_at']=='2026-10-28T07:30:00.000Z',row
  assert len(row['links'])==1 and row['links'][0]['text']=='Карта',row['links']
  assert {m['kind'] for m in row['media']}=={'image','video'},row['media']
