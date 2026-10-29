@@ -2,7 +2,7 @@
 const assert=require('node:assert/strict'),f=require('./worker-fixture.cjs')();
 const {extCall,spawn,tabs,makePost:p,obs,feedSender,deepAll,exportSender}=f;
 const state=()=>extCall('archiveStatus',{group:'backpackIL'});
-async function start(mode){await extCall('start',{tabId:5,url:tabs.get(5).url,mode,replacePaused:true,options:{maxPosts:5}});await extCall('rewindResult',{result:{ok:true}},feedSender());}
+async function start(mode){await extCall('start',{tabId:5,url:tabs.get(5).url,mode,replacePaused:true,options:{maxPosts:5}});await f.rewind();}
 async function ack(n){const j=await extCall('status');return extCall('exportComplete',{batchNumber:j.batchNumber,sessionId:j.id,downloadId:n,sha256:String(n).repeat(64)},exportSender());}
 (async()=>{
  spawn();await start('history');

@@ -85,12 +85,14 @@ async function seekCheckpoint(initial){
  for(let i=0;i<50;i++){
   job=await send('status');
   if(!job||job.id!==initial.id||job.paused||job.stage!=='discover'||!job.checkpointPending||job.rewindPending)return;
+  const order=C.inspectFeedOrder(document);
+  if(!job.feedOrder?.verified||job.feedOrder.page_instance!==PAGE_INSTANCE||order.status==='other_order'){await send('feedOrderLost',{pageInstance:PAGE_INSTANCE,feed_order:order});return;}
   if(await handleObstruction(job,'поиск checkpoint'))return;
   const result=await S.step({job,doc:document,view:window,scroll:F,observe:()=>feedObservations(job.group),wait:delay,
-   submit:observations=>send('discover',{observations,step:1,viewportHeight:Math.max(1,Number(window.innerHeight)||800)}),
+   submit:observations=>send('discover',{observations,pageInstance:PAGE_INSTANCE,feed_order:C.inspectFeedOrder(document),step:1,viewportHeight:Math.max(1,Number(window.innerHeight)||800)}),
    stopped:async()=>{const j=await send('status');return !j||j.id!==initial.id||j.paused||j.stage!=='discover'||!j.checkpointPending;}});
   if(result.stop)return;
-  if(result.stalled){await send('endDiscovery',{reason:'поиск остановился без подтверждённого продвижения',diagnostics:result.diagnostics});return;}
+  if(result.stalled){await send('endDiscovery',{pageInstance:PAGE_INSTANCE,reason:'поиск остановился без подтверждённого продвижения',diagnostics:result.diagnostics});return;}
   if(i+1>=result.batchSize)return;
  }
 }
@@ -98,10 +100,20 @@ async function discover(job){
  if(!isFeed())return;
  if(await handleObstruction(job,'разведка'))return;
  if(job.rewindPending){
-  const result=await F.rewindToTop(document,window,delay);
-  await send('rewindResult',{result});
+  let result=await F.rewindToTop(document,window,delay);
+  if(result.ok){
+   const order=await C.ensureNewPosts(document,{wait:delay,stopped:async()=>{const current=await send('status');return !current||current.id!==job.id||current.paused||current.stage!=='discover';}});
+   if(order.paused)return;
+   if(order.status==='selected_new_posts')result=await F.rewindToTop(document,window,delay);
+   result={...result,ok:Boolean(result.ok&&order.verified),feed_order:order};
+  }
+  await send('rewindResult',{result,pageInstance:PAGE_INSTANCE});
   noNew=0;noMove=0;
   return;
+ }
+ const order=C.inspectFeedOrder(document);
+ if(!job.feedOrder?.verified||job.feedOrder.page_instance!==PAGE_INSTANCE||order.status==='other_order'){
+  await send('feedOrderLost',{pageInstance:PAGE_INSTANCE,feed_order:order});return;
  }
  if(job.checkpointPending){await seekCheckpoint(job);return;}
  const group=job.group;
@@ -109,7 +121,7 @@ async function discover(job){
  const nodes=C.postNodes(document);C.expandVisible(nodes,12,'post');await delay(450);
  if(await handleObstruction(job,'разведка после раскрытия'))return;
  const observations=feedObservations(group);
- const r=await send('discover',{observations,step:1,viewportHeight:Math.max(1,Number(window.innerHeight)||800)});
+ const r=await send('discover',{observations,pageInstance:PAGE_INSTANCE,feed_order:C.inspectFeedOrder(document),step:1,viewportHeight:Math.max(1,Number(window.innerHeight)||800)});
  if(!r||r.stage!=='discover')return;
  if(r.seekingCheckpoint)noNew=0;else if(r.added)noNew=0;else noNew++;
  const movement=await F.advance(document,window,delay);
@@ -118,7 +130,7 @@ async function discover(job){
  noMove=movement.moved?0:noMove+1;
  if(noMove===8||noMove===16){await delay(noMove===8?3000:7000);const probe=await F.advance(document,window,delay);if(probe.moved){noMove=0;noNew=0;return;}}
  if(noNew>=36||noMove>=24){
-   await send('endDiscovery',{reason:`Недостаточно данных: без новых ${noNew}, без прокрутки ${noMove}`,
+   await send('endDiscovery',{pageInstance:PAGE_INSTANCE,reason:`Недостаточно данных: без новых ${noNew}, без прокрутки ${noMove}`,
      diagnostics:{noNew,noMove,scroll:movement.tries,visibleCards:observations.filter(x=>x.visible).length,totalCards:observations.length,href:location.pathname}});
  }
 }

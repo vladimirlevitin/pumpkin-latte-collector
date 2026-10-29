@@ -2,6 +2,16 @@
 
 Статус: работа идёт; релиз не собран и не заявлен готовым.
 
+## Шестой блок — подтверждение порядка ленты (проверяется)
+
+inspectFeedOrder/ensureNewPosts опираются на реально прочитанный composite control: role=button, aria-haspopup=dialog/menu, собственный h2 «Новые публикации», вне FeedUnit/article. Составная подпись распознаётся; неизвестный порядок в узнаваемом control не принимается за отсутствие control. Открывается только собственная новая panel; чужая/неоднозначная/неподтверждённая выборка не считается успехом. После смены порядка лента повторно возвращается наверх.
+
+rewindResult требует New posts proof и совпадение pageInstance с реальным feed probe. Discovery и checkpoint seek связаны с этой версией документа. После замены документа или обнаруженной смены порядка — recovery с сохранением drafts и новая проверка, без использования старого proof. Root/permalink/foreign sender разделены. Collect/Deep не стартуют без доказанного порядка. В JSON и download receipt записывается feed_order. При legacy/unknown order raw сохраняется partial/incomplete, но head/tail/checkpoint не сдвигаются.
+
+Targeted Node worker tests и браузерные fixtures composite heading/dialog, real feed content protocol и partial export PASS. Повторены multi-batch/checkpoint/recovery/pinned/new-only/Deep tests: PASS. В полный набор добавлены три файла, теперь 42. Полный Windows run и CI шестого блока ещё не завершены. Не переносить CI 9b00909 на эти изменения.
+
+Остаётся проверить текущие live menu layouts и длительный сбор, импорт/author mapping/watcher в изоляции; релиз и ZIP не готовы. Ранжирование Facebook/модерация/вставка задним числом могут менять ленту; наблюдаемый New posts control — условие корректного алгоритма, не математическое доказательство отсутствия любых недоступных публикаций.
+
 ## Текущая сводка — четвёртый блок, 29 октября
 
 Блок 3, commit 613efc7351f9443a3041958c28f5d04b0eb463dc: все три GitHub Actions success (40806768097, 40806762747, 40806768125), полный набор 33 тестовых файла. Ранее записанное ожидание CI ниже является историей.

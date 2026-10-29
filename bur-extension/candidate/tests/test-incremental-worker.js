@@ -6,7 +6,7 @@ const archive=async group=>extCall('archiveStatus',{group:group||'backpackIL'});
 let receipt=0;
 async function ack(){const j=await extCall('status');return extCall('exportComplete',{batchNumber:j.batchNumber,sessionId:j.id,sha256:(++receipt).toString(16).padStart(64,'0'),downloadId:receipt},exportSender());}
 async function begin(mode='history',tab=5){return extCall('start',{tabId:tab,url:tabs.get(tab).url,mode,replacePaused:true,options:{maxPosts:5}});}
-async function rewind(tab=5){return extCall('rewindResult',{result:{ok:true}},{tab:{...tabs.get(tab)},frameId:0});}
+async function rewind(tab=5){return f.rewind(tab);}
 (async()=>{
  spawn();let j=await begin();const historyId=j.id;
  await extCall('discover',{posts:[p(10)],step:1},feedSender());assert.equal((await extCall('status')).discovered,0,'unverified root cannot establish a baseline');

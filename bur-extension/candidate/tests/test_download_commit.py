@@ -13,7 +13,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as profile,sync_pla
  c,w,control=launch();base=w.url.rsplit('/',1)[0]
  control.evaluate('''async()=>{
   const ids=['1700000000000011','1700000000000012'];
-  const j={id:'download-test',sessionId:'download-test',group:'offline-fixture',stage:'exporting',paused:true,batchNumber:1,completedBatches:0,sessionPosts:0,sessionDeepDone:0,sessionDeepErrors:0,options:{maxPosts:5},discovered:2,steps:1,queue:ids,discoveryOrder:ids,deepDone:2,deepErrors:0,lastCollectedPostId:ids[1]};
+  const j={id:'download-test',sessionId:'download-test',group:'offline-fixture',feedOrder:{verified:true,order:'new_posts',page_instance:'saved-source-doc'},stage:'exporting',paused:true,batchNumber:1,completedBatches:0,sessionPosts:0,sessionDeepDone:0,sessionDeepErrors:0,options:{maxPosts:5},discovered:2,steps:1,queue:ids,discoveryOrder:ids,deepDone:2,deepErrors:0,lastCollectedPostId:ids[1]};
   await chrome.storage.local.set({'burCollectorJob-v0520':j});
   await new Promise((resolve,reject)=>{const request=indexedDB.open('bur-collector-v05',1);request.onupgradeneeded=()=>{const store=request.result.createObjectStore('posts',{keyPath:'key'});store.createIndex('group','group')};request.onsuccess=()=>{const db=request.result,tx=db.transaction('posts','readwrite');ids.forEach(id=>tx.objectStore('posts').put({key:j.group+'|post:'+id,group:j.group,post_id:id,post_text:'Offline fixture',comments:[]}));tx.oncomplete=()=>{db.close();resolve()};tx.onerror=()=>reject(tx.error)};request.onerror=()=>reject(request.error)});
  }''')

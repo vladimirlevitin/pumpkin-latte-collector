@@ -6,7 +6,7 @@ root=Path(__file__).resolve().parents[1]
 cp='1727687685009933'
 feed='https://www.facebook.com/groups/backpackIL/'
 html='''<!doctype html><meta charset="utf-8"><style>body{margin:0;height:50000px}article{height:300px}</style>
-<div role="feed"><article role="article"><a href="/groups/backpackIL/posts/1800000000000001/">Date</a><div data-ad-preview="message">Fixture post before checkpoint. Travel and routes.</div></article></div>'''
+<div role="button" aria-haspopup="dialog" aria-expanded="false">сортировать ленту группы по параметру<h2>Новые публикации</h2></div><div role="feed"><article role="article"><a href="/groups/backpackIL/posts/1800000000000001/">Date</a><div data-ad-preview="message">Fixture post before checkpoint. Travel and routes.</div></article></div>'''
 with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp,sync_playwright() as p:
  ctx=p.chromium.launch_persistent_context(tmp,channel='chromium',headless=True,args=[f'--disable-extensions-except={root}',f'--load-extension={root}'])
  ctx.route('https://www.facebook.com/**',lambda route:route.fulfill(body=html,content_type='text/html'))

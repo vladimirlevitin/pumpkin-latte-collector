@@ -18,7 +18,7 @@ const chrome={downloads:{search:async({id})=>[{id,state:downloadState,exists:tru
  onUpdated:{addListener:cb=>tabUpdatedListener=cb},onRemoved:{addListener:cb=>tabRemovedListener=cb}
 },scripting:{executeScript:async()=>{injections++;connected=true;}},alarms:{create(){},onAlarm:{addListener:cb=>alarmListener=cb}}};
 function spawn(){const context={chrome,indexedDB,IDBKeyRange,URL,console,setTimeout,clearTimeout,Date,structuredClone,fetch:()=>{requests++;throw Error('MUST NOT call model or API')}};context.globalThis=context;const ctx=vm.createContext(context);context.importScripts=(...files)=>{for(const file of files)vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),ctx,{filename:file});};vm.runInContext(fs.readFileSync(path.join(root,'background.js'),'utf8'),ctx,{filename:'background.js'});}
-function extCall(type,msg={},sender={}){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('timeout '+type)),8000);sendListener({type,...msg},sender,r=>{clearTimeout(timer);r.ok?resolve(r.result):reject(Error(r.error));});});}
+function extCall(type,msg={},sender={}){if(['discover','rewindResult','endDiscovery','feedOrderLost'].includes(type)&&!Object.hasOwn(msg,'pageInstance'))msg={...msg,pageInstance:feedPageInstance};return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('timeout '+type)),8000);sendListener({type,...msg},sender,r=>{clearTimeout(timer);r.ok?resolve(r.result):reject(Error(r.error));});});}
 function feedSender(){return {tab:{...tabs.get(5)},frameId:0};}
 function deepSender(j){return {tab:{...tabs.get(j.deepTabId)},frameId:0};}
 function exportSender(){return {url:'chrome-extension://test/export.html?auto=1',tab:{id:90,url:'chrome-extension://test/export.html?auto=1'}};}
@@ -26,5 +26,6 @@ function makePost(i){const id=String(1700000000000000+i);return {group:'backpack
 function obs(p,top){return {post:p,top,bottom:top+80,visible:top+80>0&&top<800,viewportHeight:800};}
 async function deepAll(){let j=await extCall('status');while(j.stage==='deep'){const id=j.queue[j.index],p={...makePost(Number(id)-1700000000000000),group:j.group,permalink:'https://www.facebook.com/groups/'+j.group+'/posts/'+id+'/'};await extCall('deepSnapshot',{post:{...p,comments:[{id:'c'+id,text:'comment',author:'A'}]},expanded:1,scrolled:1},deepSender(j));j=await extCall('status');}}
 
-return {spawn,extCall,storage,posts,tabs,makePost,obs,deepAll,feedSender,deepSender,exportSender,setFeedPosition:(id,y)=>{feedPageInstance=id;feedScrollY=y;},setDownloadState:s=>{downloadState=s;},failNextCommit:()=>{failCommit=true;}};
+async function rewind(tab=5){return extCall('rewindResult',{result:{ok:true,feed_order:{verified:true,order:'new_posts',source:'fixture_visible_sort'}}},{tab:{...tabs.get(tab)},frameId:0});}
+return {rewind,spawn,extCall,storage,posts,tabs,makePost,obs,deepAll,feedSender,deepSender,exportSender,setFeedPosition:(id,y)=>{feedPageInstance=id;feedScrollY=y;},setDownloadState:s=>{downloadState=s;},failNextCommit:()=>{failCommit=true;}};
 };

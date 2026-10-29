@@ -17,7 +17,7 @@ const chrome={downloads:{search:async({id})=>[{id,state:downloadState,exists:tru
  onUpdated:{addListener:cb=>tabUpdatedListener=cb},onRemoved:{addListener:cb=>tabRemovedListener=cb}
 },scripting:{executeScript:async()=>{injections++;connected=true;}},alarms:{create(){},onAlarm:{addListener:cb=>alarmListener=cb}}};
 function spawn(){const context={chrome,indexedDB,IDBKeyRange,URL,console,setTimeout,clearTimeout,Date,structuredClone,fetch:()=>{requests++;throw Error('MUST NOT call model or API')}};context.globalThis=context;const ctx=vm.createContext(context);context.importScripts=(...files)=>{for(const file of files)vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),ctx,{filename:file});};vm.runInContext(fs.readFileSync(path.join(root,'background.js'),'utf8'),ctx,{filename:'background.js'});}
-function extCall(type,msg={},sender={}){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('timeout '+type)),8000);sendListener({type,...msg},sender,r=>{clearTimeout(timer);r.ok?resolve(r.result):reject(Error(r.error));});});}
+function extCall(type,msg={},sender={}){if(['discover','rewindResult','endDiscovery','feedOrderLost'].includes(type)&&!Object.hasOwn(msg,'pageInstance'))msg={...msg,pageInstance:feedPageInstance};return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('timeout '+type)),8000);sendListener({type,...msg},sender,r=>{clearTimeout(timer);r.ok?resolve(r.result):reject(Error(r.error));});});}
 function feedSender(){return {tab:{...tabs.get(5)},frameId:0};}
 function deepSender(j){return {tab:{...tabs.get(j.deepTabId)},frameId:0};}
 function exportSender(){return {url:'chrome-extension://test/export.html?auto=1',tab:{id:90,url:'chrome-extension://test/export.html?auto=1'}};}
@@ -28,7 +28,7 @@ async function deepAll(){let j=await extCall('status');while(j.stage==='deep'){c
  spawn();
  let j=await extCall('start',{tabId:5,url:tabs.get(5).url,options:{maxPosts:5,maxSteps:500}});
  assert.equal(j.stage,'discover');assert.equal(j.feedTabId,5);assert.equal(j.deepTabId,null);assert.equal(injections,1);
- await extCall('rewindResult',{result:{ok:true}},feedSender());
+ await extCall('rewindResult',{result:{ok:true,feed_order:{verified:true,order:'new_posts',source:'fixture_visible_sort'}}},feedSender());
  const feedUrl=tabs.get(5).url;
  // Batch 1 discovery reaches 5 and MUST create a separate deep tab without moving feed.
  let r=await extCall('discover',{posts:[0,1,2,3,4].map(makePost),step:1},feedSender());
@@ -66,7 +66,7 @@ async function deepAll(){let j=await extCall('status');while(j.stage==='deep'){c
  j=await extCall('status');assert.equal(j.checkpointPending,false);assert.equal(j.discovered,3);assert.equal(j.discoveryOrder.join(','),[10,11,12].map(i=>makePost(i).post_id).join(','));assert.equal(reloads,0);
  // Only a real document replacement is allowed to trigger checkpoint recovery.
  feedPageInstance='feed-doc-2';feedScrollY=0;
- for(let i=0;i<9;i++)await extCall('endDiscovery',{reason:'test stall',diagnostics:{i}},feedSender());
+ await extCall('feedOrderLost',{feed_order:{verified:true,order:'new_posts',status:'already_new_posts'}},feedSender());
  assert.ok(posts.size>=13,'recovery retains incomplete batch snapshots');
  j=await extCall('status');assert.equal(j.checkpointPending,true);assert.equal(j.rewindPending,true);assert.equal(j.checkpointPostId,makePost(9).post_id);assert.ok(reloads>=1);
  // Closing the feed during Deep must preserve the active batch/phase.

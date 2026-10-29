@@ -18,7 +18,7 @@ with sync_playwright() as p:
     if(mode==='ignored')return {ok:true,result:{ignored:true}};
     if(mode==='error')return {ok:false,error:'storage unavailable'};
     const count=mode==='empty'?0:53;
-    return {ok:true,result:{job:{id:'saved',group:'backpackIL',stage:mode==='partial'?'deep':'done',options:{maxPosts:count},queue:Array(count).fill('id'),deepDone:count,deepErrors:0},total:count,items:Array.from({length:count},(_,i)=>({post_id:String(i),comments:[{text:'saved comment '+i}]})).slice(msg.offset,msg.offset+msg.limit)}};
+    return {ok:true,result:{job:{id:'saved',group:'backpackIL',stage:mode==='partial'?'deep':'done',feedOrder:mode==='unknown_order'?null:{verified:true,order:'new_posts',page_instance:'fixture-doc'},options:{maxPosts:count},queue:Array(count).fill('id'),deepDone:count,deepErrors:0},total:count,items:Array.from({length:count},(_,i)=>({post_id:String(i),comments:[{text:'saved comment '+i}]})).slice(msg.offset,msg.offset+msg.limit)}};
    }}};
   }''',mode)
  setup('saved')
@@ -37,6 +37,9 @@ with sync_playwright() as p:
  with page.expect_download() as event: page.evaluate((root/'archive-graph.js').read_text(encoding='utf-8'));page.evaluate(script)
  empty=json.loads(Path(event.value.path()).read_text(encoding='utf-8'));assert empty['posts']==[] and empty['job_summary']['stage']=='partial'
  setup('partial')
+ with page.expect_download() as event:page.evaluate((root/'archive-graph.js').read_text(encoding='utf-8'));page.evaluate(script)
+ assert json.loads(Path(event.value.path()).read_text(encoding='utf-8'))['job_summary']['stage']=='partial'
+ setup('unknown_order')
  with page.expect_download() as event:page.evaluate((root/'archive-graph.js').read_text(encoding='utf-8'));page.evaluate(script)
  assert json.loads(Path(event.value.path()).read_text(encoding='utf-8'))['job_summary']['stage']=='partial'
  for mode in ['ignored','error']:

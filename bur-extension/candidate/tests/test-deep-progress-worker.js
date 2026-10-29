@@ -4,7 +4,7 @@ const {spawn,extCall,tabs,makePost:p,feedSender,deepSender,deepAll,posts}=f;
 const comment=n=>({id:'comment-'+n,text:'Persisted comment '+n});
 const message=ids=>({id:p(10).post_id,post:{...p(10),comments:ids.map(comment)}});
 (async()=>{
- spawn();await extCall('start',{tabId:5,url:tabs.get(5).url,options:{maxPosts:5}});await extCall('rewindResult',{result:{ok:true}},feedSender());await extCall('discover',{posts:[10,9,8,7,6].map(p),step:1},feedSender());
+ spawn();await extCall('start',{tabId:5,url:tabs.get(5).url,options:{maxPosts:5}});await f.rewind();await extCall('discover',{posts:[10,9,8,7,6].map(p),step:1},feedSender());
  let j=await extCall('status');await extCall('deepExpanding',{id:j.queue[j.index]},deepSender(j));
  const wrong=await extCall('deepProgress',message([99]),feedSender());assert.equal(wrong.ignored,true);
  await extCall('deepProgress',message([1]),deepSender(j));j=await extCall('status');assert.equal(j.index,0);assert.equal(j.deepDone,0);

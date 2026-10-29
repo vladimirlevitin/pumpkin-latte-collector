@@ -16,7 +16,7 @@ const chrome={runtime:{onMessage:{addListener:cb=>sendListener=cb},onInstalled:{
  onUpdated:{addListener:cb=>tabUpdatedListener=cb},onRemoved:{addListener:cb=>tabRemovedListener=cb}
 },scripting:{executeScript:async()=>{injections++;connected=true;}},alarms:{create(){},onAlarm:{addListener:cb=>alarmListener=cb}}};
 function spawn(){const context={chrome,indexedDB,IDBKeyRange,URL,console,setTimeout,clearTimeout,Date,structuredClone,fetch:()=>{requests++;throw Error('MUST NOT call model or API')}};context.globalThis=context;const ctx=vm.createContext(context);context.importScripts=(...files)=>{for(const file of files)vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),ctx,{filename:file});};vm.runInContext(fs.readFileSync(path.join(root,'background.js'),'utf8'),ctx,{filename:'background.js'});}
-function extCall(type,msg={},sender={}){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('timeout '+type)),8000);sendListener({type,...msg},sender,r=>{clearTimeout(timer);r.ok?resolve(r.result):reject(Error(r.error));});});}
+function extCall(type,msg={},sender={}){if(['discover','rewindResult','endDiscovery','feedOrderLost'].includes(type)&&!Object.hasOwn(msg,'pageInstance'))msg={...msg,pageInstance:feedPageInstance};return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('timeout '+type)),8000);sendListener({type,...msg},sender,r=>{clearTimeout(timer);r.ok?resolve(r.result):reject(Error(r.error));});});}
 function feedSender(){return {tab:{...tabs.get(5)},frameId:0};}
 function deepSender(j){return {tab:{...tabs.get(j.deepTabId)},frameId:0};}
 function exportSender(){return {url:'chrome-extension://test/export.html?auto=1',tab:{id:90,url:'chrome-extension://test/export.html?auto=1'}};}
@@ -28,7 +28,7 @@ async function deepAll(){let j=await extCall('status');while(j.stage==='deep'){c
  const cp='1727687685009933';
  let j=await extCall('start',{tabId:5,url:tabs.get(5).url,startAfter:cp,options:{maxPosts:5,maxSteps:50000}});
  assert.equal(j.checkpointPostId,cp);assert.equal(j.checkpointPending,true);
- await extCall('rewindResult',{result:{ok:true}},feedSender());
+ await extCall('rewindResult',{result:{ok:true,feed_order:{verified:true,order:'new_posts',source:'fixture_visible_sort'}}},feedSender());
  for(let i=0;i<2100;i++)await extCall('discover',{observations:[obs(makePost(i),100)],step:1},feedSender());
  j=await extCall('status');assert.equal(j.discovered,0);assert.equal(j.checkpointPostId,cp);assert.equal(j.checkpointFound,false);
  await extCall('pause');spawn();

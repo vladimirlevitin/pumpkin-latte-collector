@@ -3,7 +3,7 @@ const assert=require('node:assert/strict'),f=require('./worker-fixture.cjs')();
 const {spawn,extCall,tabs,makePost:p,feedSender,deepAll,exportSender,storage,posts}=f;
 (async()=>{
  spawn();await extCall('start',{tabId:5,url:tabs.get(5).url,options:{maxPosts:5}});
- await extCall('rewindResult',{result:{ok:true}},feedSender());await extCall('discover',{posts:[10,9,8,7,6].map(p),step:1},feedSender());await deepAll();
+ await f.rewind();await extCall('discover',{posts:[10,9,8,7,6].map(p),step:1},feedSender());await deepAll();
  const j=await extCall('status'),ack={batchNumber:1,sessionId:j.id,downloadId:1,sha256:'a'.repeat(64)};
  f.failNextCommit();await assert.rejects(extCall('exportComplete',ack,exportSender()),/storage failure/);
  assert.equal((await extCall('status')).stage,'exporting');assert.equal(posts.size,5);

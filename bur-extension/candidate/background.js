@@ -199,7 +199,7 @@ async function start({tabId,url,options={},replacePaused=false,startAfter=null,m
   stage:'discover',paused:false,startedAt:now(),lastSeen:now(),batchStartedAt:now(),batchNumber:1,completedBatches:0,sessionPosts:0,sessionDeepDone:0,sessionDeepErrors:0,
   steps:0,discovered:0,deepDone:0,deepErrors:0,queue:[],discoveryOrder:[],checkpointSeenIds:[],historyRejected:0,historyCount:history.size,index:0,options:opts,
   checkpointPostId:checkpoint?.post_id||null,checkpointPending:hasCheckpoint,checkpointFound:false,checkpointScanSteps:0,checkpointSource:manual?'manual':(checkpoint?.recovered_after_reinstall?'facebook_localstorage':'stored'),
-  rewindPending:true,rewindVerified:false,rewindDiagnostics:null,liveBoundaryPending:false,liveBoundaryPostId:null,liveBoundaryScanSteps:0,
+  rewindPending:true,rewindVerified:false,rewindDiagnostics:null,feedOrder:null,liveBoundaryPending:false,liveBoundaryPostId:null,liveBoundaryScanSteps:0,
   feedPageInstance:String(feedReady?.pageInstance||''),feedAnchorScrollY:Number(feedReady?.scrollY)||0,feedAnchorAt:new Date().toISOString(),feedContinuationMode:'start',
   note:mode==='update'?(archive.head?'Собираю новые публикации до прежней верхней границы.':'Верхняя граница пока неизвестна. Связываю начало группы с прежней выгрузкой до сохранённого хвоста.'):hasCheckpoint?'Аварийный старт: возвращаю ленту наверх и ищу checkpoint '+checkpoint.post_id+'. После него сессия будет идти непрерывно.':'Непрерывная сессия: вкладка ленты остаётся на месте, deep выполняется отдельно.'};
  await setJob(j,{[ARCHIVE_KEY]:archives});
@@ -221,7 +221,7 @@ async function resume(tabId,url){
  else if(j.stage==='discover'){
   const probe=await probeFeedState(feedId(j),j.group);
   if(!probe.ok)await recoverFeedFromCheckpoint(j,'Вкладка ленты недоступна при возобновлении',probe);
-  else if(!j.checkpointPending&&!j.rewindPending&&!feedPositionPreserved(j,probe)){
+  else if(!j.rewindPending&&(!j.feedOrder?.verified||j.feedOrder.page_instance!==probe.pageInstance||!j.checkpointPending&&!feedPositionPreserved(j,probe))){
    await recoverFeedFromCheckpoint(j,'При возобновлении обнаружена реальная потеря живой feed-позиции',{
     expectedPageInstance:j.feedPageInstance,actualPageInstance:probe.pageInstance,
     anchorScrollY:j.feedAnchorScrollY??null,actualScrollY:probe.scrollY??null
@@ -246,6 +246,7 @@ async function beginDeep(j,reason){
  if(j.checkpointPending)throw Error('Контрольная точка ещё не найдена. До неё Бур только листает и ничего не сохраняет.');
  if(j.liveBoundaryPending)throw Error('Живая граница предыдущего пакета ещё не подтверждена.');
  const feedProbe=await probeFeedState(feedId(j),j.group);
+ if(!j.feedOrder?.verified||!feedProbe.ok||feedProbe.pageInstance!==j.feedOrder.page_instance)return recoverFeedFromCheckpoint(j,'Перед подробным сбором требуется подтверждение порядка ленты',feedProbe);
  if(feedProbe.ok){j.feedPageInstance=feedProbe.pageInstance;j.feedAnchorScrollY=feedProbe.scrollY;j.feedAnchorAt=new Date().toISOString();j.feedContinuationMode='deep_anchor';}
  const all=await allPosts(j.group),byId=new Map(all.filter(p=>p.post_id).map(p=>[String(p.post_id),p]));
  let ids=(Array.isArray(j.discoveryOrder)?j.discoveryOrder:[]).map(String).filter(id=>byId.has(id));
@@ -259,7 +260,9 @@ async function beginDeep(j,reason){
 async function collectFound(tabId,url){
  const j=await getJob();if(!j||!(j.stage==='discover'||j.stage==='stalled'&&j.stall?.resumeStage==='discover'))throw Error('Сначала запустите разведку');
  if(groupOf(url)!==j.group||tabId!==feedId(j))throw Error('Вернитесь в исходную вкладку группы '+j.group);
- if(j.checkpointPending||j.liveBoundaryPending)throw Error('Граница продолжения ещё не подтверждена; до неё Бур ничего не сохраняет.');
+ if(j.rewindPending||!j.feedOrder?.verified||j.checkpointPending||j.liveBoundaryPending)throw Error('Порядок ленты и граница продолжения ещё не подтверждены; до них Бур ничего не сохраняет.');
+ const probe=await probeFeedState(feedId(j),j.group);
+ if(!probe.ok||probe.pageInstance!==j.feedOrder.page_instance)return recoverFeedFromCheckpoint(j,'Документ ленты изменился перед подробным сбором',probe);
  return beginDeep(j,'нажата кнопка «Собрать найденные»');
 }
 async function stall(j,reason,details,resumeStage){j.stage='stalled';j.paused=true;j.stall={at:new Date().toISOString(),reason,details:details||null,resumeStage:resumeStage||j.stage};j.note='Приостановлено: '+reason+'. Данные не отмечены как завершённый пакет.';await setJob(j);return j;}
@@ -271,7 +274,7 @@ async function recoverFeedFromCheckpoint(j,reason,details=null){
  // Re-discovery merges retained snapshots.
  j.stage='discover';j.paused=false;j.steps=0;j.discovered=0;j.headCandidates=[];j.feedPinById={};j.deepDone=0;j.deepErrors=0;j.batchDeepTotal=0;j.queue=[];j.index=0;j.discoveryOrder=[];j.checkpointSeenIds=[];j.historyRejected=0;
  j.checkpointPostId=hasBoundary?boundary:null;j.checkpointPending=hasBoundary;j.checkpointFound=false;j.checkpointScanSteps=0;j.checkpointSource='recovery';
- j.liveBoundaryPending=false;j.liveBoundaryPostId=null;j.liveBoundaryScanSteps=0;j.rewindPending=true;j.rewindVerified=false;j.rewindDiagnostics=null;
+ j.liveBoundaryPending=false;j.liveBoundaryPostId=null;j.liveBoundaryScanSteps=0;j.rewindPending=true;j.rewindVerified=false;j.rewindDiagnostics=null;j.feedOrder=null;
  j.feedRecoveryCount=(j.feedRecoveryCount||0)+1;j.resumeCount=(j.resumeCount||0)+1;
  j.note='Позиция живой ленты потеряна. Автовосстановление от checkpoint '+boundary+'; снимки незавершённого пакета сохранены локально для повторной обработки.';
  let tab=null;try{tab=await chrome.tabs.get(feedId(j));}catch{}
@@ -321,17 +324,31 @@ async function obstructed(msg,sender){
  return {recovered:true};
 }
 async function rewindResult(msg,sender){
- const j=await getJob();if(!j||j.stage!=='discover'||j.paused||senderRole(j,sender)!=='feed')return {ignored:true};
+ const j=await getJob();if(!j||j.stage!=='discover'||j.paused||senderRole(j,sender)!=='feed'||!isRootFeedUrl(sender.tab?.url,j.group))return {ignored:true};
  if(!j.rewindPending)return {ignored:true,alreadyDone:true};
  const r=msg.result||{};j.lastSeen=now();j.rewindDiagnostics=r;
+ if(!r.feed_order?.verified||r.feed_order.order!=='new_posts')return stall(j,'Не подтверждён хронологический порядок «Новые публикации»; границы архива не меняются',{feed_order:r.feed_order||null,rewind:r},'discover');
  if(!r.ok)return stall(j,'Не удалось надёжно вернуть Facebook-ленту к самому верху; checkpoint не ищется',{rewind:r},'discover');
+ const probe=await probeFeedState(feedId(j),j.group);
+ if(!probe.ok||!msg.pageInstance||msg.pageInstance!==probe.pageInstance)return {ignored:true,stale_document:true};
+ j.feedOrder={...r.feed_order,page_instance:probe.pageInstance,verified_at:new Date().toISOString()};j.feedPageInstance=probe.pageInstance;
  j.rewindPending=false;j.rewindVerified=true;j.rewindDoneAt=new Date().toISOString();j.steps=0;j.checkpointScanSteps=0;j.checkpointSeenIds=[];j.note=j.checkpointPending?'Верх подтверждён. Ищу точку продолжения '+j.checkpointPostId+'.':j.runMode==='update'?'Верх подтверждён. Собираю до сохранённой границы '+j.updateStopId+'.':'Верх подтверждён. Начинаю сбор истории группы.';
  if(j.archiveManaged&&!j.archiveRunStarted){j.archiveRunStarted=true;await archiveJob(j,state=>A.begin(state,{runId:j.id,mode:j.runMode,fromRoot:j.runStartsFromRoot}));}
  await setJob(j);await notifyTab(feedId(j));return {ok:true,rewindVerified:true,checkpoint:j.checkpointPostId};
 }
+async function feedOrderLost(msg,sender){
+ const j=await getJob();if(!j||j.paused||j.stage!=='discover'||senderRole(j,sender)!=='feed'||!isRootFeedUrl(sender.tab?.url,j.group))return {ignored:true};
+ if(j.rewindPending)return {ignored:true,rewinding:true};
+ const probe=await probeFeedState(feedId(j),j.group);
+ if(!probe.ok||!msg.pageInstance||msg.pageInstance!==probe.pageInstance)return {ignored:true,stale_document:true};
+ if(j.feedOrder?.verified&&j.feedOrder.page_instance===msg.pageInstance&&msg.feed_order?.status!=='other_order')return {ignored:true};
+ return recoverFeedFromCheckpoint(j,'Сменился документ или порядок ленты; сначала заново подтверждаю «Новые публикации»',{feed_order:msg.feed_order||null,pageInstance:msg.pageInstance});
+}
 async function discovered(msg,sender){
- const j=await getJob();if(!j||j.stage!=='discover'||j.paused||senderRole(j,sender)!=='feed')return {ignored:true};
+ const j=await getJob();if(!j||j.stage!=='discover'||j.paused||senderRole(j,sender)!=='feed'||!isRootFeedUrl(sender.tab?.url,j.group))return {ignored:true};
  if(j.rewindPending)return {ignored:true,rewinding:true,stage:j.stage,discovered:j.discovered};
+ if(!j.feedOrder?.verified||msg.pageInstance!==j.feedOrder.page_instance)return {ignored:true,unverified_feed_order:true,stage:j.stage};
+ if(msg.feed_order?.status==='other_order')return recoverFeedFromCheckpoint(j,'Во время сбора изменился порядок ленты',{feed_order:msg.feed_order});
  const observations=observationsFrom(msg),vh=Math.max(1,Number(msg.viewportHeight)||observations[0]?.viewportHeight||800);
  j.steps+=Math.min(1,Number(msg.step)||0);j.lastSeen=now();let candidateRows=[];
  if(j.liveBoundaryPending){
@@ -393,6 +410,7 @@ async function discovered(msg,sender){
 }
 async function endDiscovery(msg,sender){
  const j=await getJob();if(!j||j.stage!=='discover'||j.paused||senderRole(j,sender)!=='feed')return j;
+ if(!isRootFeedUrl(sender.tab?.url,j.group)||!j.feedOrder?.verified||msg.pageInstance!==j.feedOrder.page_instance)return {ignored:true,unverified_feed_order:true};
  if(j.checkpointPending)return stall(j,'Checkpoint '+j.checkpointPostId+' не подтверждён: '+(msg.reason||'лента остановилась')+'; сбор не начат, удаление поста не доказано',msg.diagnostics,'discover');
  j.feedStallRecoveries=(j.feedStallRecoveries||0)+1;
  if(j.feedStallRecoveries<=8){
@@ -463,7 +481,8 @@ async function exportComplete(msg){
  const key=j.group+'|'+j.id+'|'+j.batchNumber;
  if(receipts[key]&&receipts[key].sha256!==msg.sha256&&!receipts[key].incomplete)throw Error('Контрольная сумма пакета изменилась');
  const previousReceipt=receipts[key]||null;
- receipts[key]={group:j.group,sha256:msg.sha256,downloadId:msg.downloadId,filename:downloaded.filename||msg.filename,retained:true,import_verified:false,incomplete:Boolean(j.deepErrors),ids:order,at:new Date().toISOString(),previous:previousReceipt&&previousReceipt.sha256!==msg.sha256?previousReceipt:null};
+ const orderUnverified=!j.feedOrder?.verified||j.feedOrder.order!=='new_posts';
+ receipts[key]={group:j.group,sha256:msg.sha256,downloadId:msg.downloadId,filename:downloaded.filename||msg.filename,retained:true,import_verified:false,incomplete:Boolean(j.deepErrors||orderUnverified),feed_order:j.feedOrder||null,ids:order,at:new Date().toISOString(),previous:previousReceipt&&previousReceipt.sha256!==msg.sha256?previousReceipt:null};
  if(j.deepErrors){
   const rows=await allPosts(j.group),failed=new Set(rows.filter(p=>p.deep?.status==='failed').map(p=>String(p.post_id)));
   const retry=order.filter(id=>failed.has(String(id)));
@@ -471,6 +490,11 @@ async function exportComplete(msg){
   j.queue=retry;j.index=0;j.deepErrors=0;j.stage='stalled';j.paused=true;
   j.stall={at:new Date().toISOString(),reason:'JSON сохранён, но часть постов требует повторного Deep',resumeStage:'deep'};
   j.note='Неполный JSON сохранён. Checkpoint не сдвинут. Продолжить — повторить '+retry.length+' постов.';j.updatedAt=now();
+  await setJob(j,{[RECEIPT_KEY]:receipts});return j;
+ }
+ if(orderUnverified){
+  j.stage='stalled';j.paused=true;j.feedOrder=null;j.stall={at:new Date().toISOString(),reason:'JSON сохранён, но порядок исходной ленты не подтверждён',resumeStage:'discover'};
+  j.note='Промежуточный JSON сохранён. Границы не сдвинуты: сначала требуется подтвердить «Новые публикации».';
   await setJob(j,{[RECEIPT_KEY]:receipts});return j;
  }
  const archives=await archiveMap();
@@ -497,7 +521,7 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{serial(async()=
  if(sender.tab&&!isExport){
   const role=senderRole(j,sender);
   if(msg.type==='status')return role?{...j,tabRole:role}:null;
-  if(['discover','rewindResult','endDiscovery'].includes(msg.type)&&role!=='feed')return {ignored:true};
+  if(['discover','rewindResult','endDiscovery','feedOrderLost'].includes(msg.type)&&role!=='feed')return {ignored:true};
   if(['deepReady','deepExpanding','deepMismatch','deepProgress','deepPassEnd','deepSnapshot','deepError'].includes(msg.type)&&role!=='deep')return {ignored:true};
   if(msg.type==='obstructed'&&!role)return {ignored:true};
   if(['start','resume','collectFound','pause','resetCheckpoint','archiveStatus'].includes(msg.type))return {ignored:true};
@@ -511,6 +535,7 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{serial(async()=
   case 'status':return j;
   case 'archiveStatus':return archiveFor(msg.group||j?.group);
   case 'rewindResult':return rewindResult(msg,sender);
+  case 'feedOrderLost':return feedOrderLost(msg,sender);
   case 'discover':return discovered(msg,sender);
   case 'obstructed':return obstructed(msg,sender);
   case 'endDiscovery':return endDiscovery(msg,sender);
@@ -541,7 +566,7 @@ chrome.alarms.onAlarm.addListener(async a=>{if(a.name!==ALARM)return;try{const j
 chrome.tabs.onUpdated.addListener((tabId,changeInfo,updatedTab)=>{if(changeInfo.status!=='complete')return;setTimeout(()=>{void serial(async()=>{
  const j=await getJob();if(!j||j.paused)return;const tab=updatedTab?.url?updatedTab:await chrome.tabs.get(tabId);
  if(tabId===deepId(j)&&j.stage==='deep'){if(await recoverDeepRedirect(j,tab.url))return;await notifyTab(tabId);return;}
- if(tabId===feedId(j)&&j.stage==='discover'){if(!isRootFeedUrl(tab.url,j.group)){await recoverFeedFromCheckpoint(j,'Feed-вкладка ушла с корня группы',{url:tab.url});return;}await notifyTab(tabId);}
+ if(tabId===feedId(j)&&j.stage==='discover'){if(!isRootFeedUrl(tab.url,j.group)){await recoverFeedFromCheckpoint(j,'Feed-вкладка ушла с корня группы',{url:tab.url});return;}if(!j.rewindPending){const probe=await probeFeedState(tabId,j.group);if(!probe.ok||!j.feedOrder?.verified||j.feedOrder.page_instance!==probe.pageInstance){await recoverFeedFromCheckpoint(j,'Перезагрузился документ ленты; порядок проверяется заново',probe);return;}}await notifyTab(tabId);}
 });},250);});
 if(chrome.tabs.onRemoved?.addListener)chrome.tabs.onRemoved.addListener((tabId)=>{void serial(async()=>{const j=await getJob();if(!j)return;if(tabId===j.deepTabId){j.deepTabId=null;await setJob(j);if(j.stage==='deep'&&!j.paused)await navigateCurrent(j);}if(tabId===feedId(j)){
  j.feedTabId=null;j.tabId=null;await setJob(j);

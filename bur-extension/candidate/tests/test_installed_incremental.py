@@ -14,7 +14,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as profile,sync_pla
  def routed(route):
   url=route.request.url
   ids=([10,9,8,7,6] if phase[0]==1 else [20,10,9,8,7,6]) if '/posts/' not in url else [int(url.split('/posts/')[1].split('/')[0])-1700000000000000]
-  route.fulfill(body='<!doctype html><meta charset="utf-8"><style>body{margin:0}article{padding:8px}</style><main role="main"><div role="feed">'+''.join(article(n) for n in ids)+'</div></main>',content_type='text/html')
+  route.fulfill(body='<!doctype html><meta charset="utf-8"><style>body{margin:0}article{padding:8px}</style><main role="main"><div role="button" aria-haspopup="dialog" aria-expanded="false">сортировать ленту группы по параметру<h2>Новые публикации</h2></div><div role="feed">'+''.join(article(n) for n in ids)+'</div></main>',content_type='text/html')
  ctx.route('https://www.facebook.com/**',routed)
  ctx.route('https://example.org/**',lambda route:route.abort())
  ctx.on('page',lambda page:page.on('download',lambda download:downloads.append(download)))
@@ -53,6 +53,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as profile,sync_pla
  assert len(downloads)==1, len(downloads)
  first_bytes=Path(downloads[0].path()).read_bytes();first_raw=json.loads(first_bytes)
  assert len(first_raw['posts'])==5 and len(first_raw['authors'])==5
+ assert first_raw['job_summary']['feed_order']['verified'] and first_raw['job_summary']['feed_order']['order']=='new_posts'
  assert first['lastExport']['sha256']==hashlib.sha256(first_bytes).hexdigest()
  assert all(p['published_at']=='2026-10-28T10:00:00.000Z' and p['links'] for p in first_raw['posts'])
  phase[0]=2;page.reload();page.wait_for_timeout(500)
@@ -64,6 +65,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as profile,sync_pla
  second_bytes=Path(downloads[1].path()).read_bytes();second_raw=json.loads(second_bytes)
  assert [p['post_id'] for p in second_raw['posts']]==[post_id(20)],second_raw
  assert second_raw['job_summary']['collection_mode']=='update'
+ assert second_raw['job_summary']['feed_order']['verified'] and second_raw['job_summary']['feed_order']['order']=='new_posts'
  assert second_raw['job_summary']['update_stop_post_id']==post_id(10)
  assert second_raw['job_summary']['update_boundary_reached'] is True
  assert done['lastExport']['sha256']==hashlib.sha256(second_bytes).hexdigest()

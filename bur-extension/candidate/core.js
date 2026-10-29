@@ -540,6 +540,48 @@
     if(!verified)closeOwn();
     return {status:verified?'selected_all':'selection_unconfirmed',verified:Boolean(verified),known_incomplete:!verified,previous_label:before,label:after.length===1?label(after[0]):null};
   }
-  return {ensureAllComments,uniqueMedia,collector,clean,hash,idFromPermalink,canonicalUrl,textQuality,truncated,
+  function feedOrderControl(doc){
+    const view=doc.defaultView;
+    const visible=el=>{if(!el?.isConnected||el.closest('[aria-hidden="true"]'))return false;const s=view.getComputedStyle(el),r=el.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)!==0&&r.width>0&&r.height>0;};
+    const newest=/^(?:New posts|Новые публикации|פוסטים חדשים)$/iu;
+    const other=/^(?:New activity|Most relevant|Recent activity|Новые действия|Новая активность|Самые актуальные|Наиболее актуальные|פעילות חדשה|הרלוונטיות ביותר)$/iu;
+    const prefix=/^(?:сортировать ленту группы по параметру|Sort group feed by)/iu;
+    const candidates=[];
+    for(const el of doc.querySelectorAll('button,[role="button"]')){
+      if(!visible(el)||!['menu','dialog'].includes(el.getAttribute('aria-haspopup'))||el.closest('[role="article"],[data-pagelet^="FeedUnit_"]'))continue;
+      const heading=[...el.querySelectorAll('h2,[role="heading"][aria-level="2"]')].map(x=>clean(x.innerText||x.textContent)).filter(Boolean);
+      const full_label=clean(el.innerText||el.getAttribute('aria-label')||'');
+      if(heading.length!==1||!prefix.test(full_label)&&!newest.test(heading[0])&&!other.test(heading[0]))continue;
+      candidates.push({el,visible,newest,label:heading[0],full_label,order:newest.test(heading[0])?'new_posts':other.test(heading[0])?'ranked':'unknown'});
+    }
+    return candidates.length===1?candidates[0]:{status:candidates.length?'ambiguous_control':'not_exposed',verified:false};
+  }
+  function inspectFeedOrder(doc){const control=feedOrderControl(doc);return control.el?{status:control.order==='new_posts'?'already_new_posts':'other_order',verified:control.order==='new_posts',order:control.order,label:control.label,full_label:control.full_label,source:'visible_feed_sort_heading'}:control;}
+  async function ensureNewPosts(doc,{wait=ms=>new Promise(r=>setTimeout(r,ms)),stopped=async()=>false}={}){
+    const found=feedOrderControl(doc);if(!found.el)return found;
+    if(found.order==='new_posts')return inspectFeedOrder(doc);
+    if(await stopped())return {status:'paused',verified:false,paused:true};
+    const {el:control,visible,newest}=found;
+    const panels=()=>[...doc.querySelectorAll('[role="dialog"],[role="menu"],[role="listbox"]')].filter(visible);
+    const before=new Set(panels());
+    if(control.getAttribute('aria-expanded')==='true')return {status:'preexisting_panel',verified:false};
+    control.click();await wait(450);
+    const closeOwn=()=>{if(control.isConnected&&control.getAttribute('aria-expanded')==='true')control.click();};
+    const fail=(status,extra={})=>{closeOwn();return {status,verified:false,order:'unknown',...extra};};
+    if(await stopped())return fail('paused',{paused:true});
+    const id=control.getAttribute('aria-controls'),linked=id?doc.getElementById(id):null;
+    let fresh=panels().filter(x=>!before.has(x));
+    fresh=fresh.filter(x=>!fresh.some(parent=>parent!==x&&parent.contains(x)));
+    const own=id?(linked&&fresh.includes(linked)?[linked]:[]):fresh;
+    if(own.length!==1)return fail('unowned_panel');
+    const options=[...own[0].querySelectorAll('button,[role="button"],[role="radio"],[role="menuitemradio"],[role="menuitem"],[role="option"]')].filter(el=>visible(el)&&newest.test(clean((el.innerText||el.getAttribute('aria-label')||'').split('\n')[0])));
+    if(options.length!==1)return fail('missing_new_posts_option');
+    options[0].click();await wait(450);
+    if(await stopped())return fail('paused',{paused:true});
+    const proof=inspectFeedOrder(doc);
+    if(!proof.verified)return fail('selection_unconfirmed');
+    return {...proof,status:'selected_new_posts',previous_label:found.label};
+  }
+  return {inspectFeedOrder,ensureNewPosts,ensureAllComments,uniqueMedia,collector,clean,hash,idFromPermalink,canonicalUrl,textQuality,truncated,
     parseDateEvidence,normalizePost,mergePosts,postNodes,extractCard,extractVisibleComments,expandVisible,permalinkPostRoot};
 });
