@@ -5,10 +5,10 @@ const read=(dir,file)=>fs.readFileSync(path.join(dir,file),'utf8').replace(/\r\n
 const sha=text=>require('node:crypto').createHash('sha256').update(text).digest('hex');
 const expected=JSON.parse(read(root,'BASELINE-SHA256.json'));
 const m=JSON.parse(read(root,'manifest.json'));
-assert.equal(m.version,'0.5.23');assert.equal(m.version_name,'0.5.23-alpha');
+assert.equal(m.version,'0.5.24');assert.equal(m.version_name,'0.5.24-alpha');
 for(const file of [m.background.service_worker,m.action.default_popup,...Object.values(m.icons),...m.content_scripts.flatMap(x=>x.js)])assert.ok(fs.existsSync(path.join(root,file)),file);
 for(const file of ['feed-scroll.js']){
- const normalized=read(root,file).replaceAll('0.5.23-alpha','0.5.20-alpha');
+ const normalized=read(root,file).replaceAll('0.5.24-alpha','0.5.20-alpha');
  assert.equal(sha(normalized),expected.files[file],'protected collector regression: '+file);
  if(fs.existsSync(path.join(baseline,file)))assert.equal(normalized,read(baseline,file));
 }

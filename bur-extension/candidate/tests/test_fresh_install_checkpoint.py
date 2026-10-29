@@ -1,8 +1,8 @@
 """Real installed extension, intercepted FB fixture; never contacts live Facebook."""
 from pathlib import Path
-import tempfile,json,re
+import tempfile,json,re,os
 from playwright.sync_api import sync_playwright
-root=Path(__file__).resolve().parents[1]
+root=Path(os.environ.get('BUR_TEST_EXTENSION_ROOT',Path(__file__).resolve().parents[1])).resolve()
 cp='1727687685009933'
 feed='https://www.facebook.com/groups/backpackIL/'
 html='''<!doctype html><meta charset="utf-8"><style>body{margin:0;height:50000px}article{height:300px}</style>
@@ -67,7 +67,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp,sync_playwri
  print('setup: opening actual toolbar popup',flush=True)
  pe=open_popup()
  manifest=pe('chrome.runtime.getManifest()')
- assert manifest['version_name']=='0.5.23-alpha'
+ assert manifest['version_name']=='0.5.24-alpha'
  assert popup_until(pe,"document.querySelector('#status').innerText.includes('Нет задания')")
  tabid=control.evaluate("async()=> (await chrome.tabs.query({})).find(x=>x.url==='https://www.facebook.com/groups/backpackIL/').id")
  ping=control.evaluate('(id)=>chrome.tabs.sendMessage(id,{type:"burPing"})',tabid)

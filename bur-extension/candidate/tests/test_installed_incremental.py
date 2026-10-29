@@ -1,9 +1,9 @@
 """Real installed extension and JSON downloads; all Facebook responses are local fixtures."""
 from pathlib import Path
-import hashlib,json,tempfile,time
+import hashlib,json,tempfile,time,os
 from playwright.sync_api import sync_playwright
 
-root=Path(__file__).resolve().parents[1]
+root=Path(os.environ.get('BUR_TEST_EXTENSION_ROOT',Path(__file__).resolve().parents[1])).resolve()
 group='offline-incremental';feed='https://www.facebook.com/groups/'+group+'/'
 def post_id(n):return str(1700000000000000+n)
 def article(n):

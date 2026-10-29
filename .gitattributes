@@ -1,2 +1,3 @@
 bur-extension/0.5.5-alpha/** -text
+bur-extension/0.5.24-alpha/** -text whitespace=cr-at-eol
 releases/*.zip binary

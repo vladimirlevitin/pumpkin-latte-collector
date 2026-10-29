@@ -9,6 +9,54 @@ from pathlib import Path
 PRODUCTION={'ltznpjfnkpydautbsrej.supabase.co','bybgnzeaoaxnxwdugnwo.supabase.co','metzia.store'}
 ID=re.compile(r'^\d{8,30}$')
 
+def validate_graph(payload):
+    if payload.get('relational_schema')!='bur-author-graph/1':raise ValueError('unsupported relational schema')
+    records=payload.get('authors')
+    if not isinstance(records,list):raise ValueError('invalid authors')
+    authors={}
+    for record in records:
+        if not isinstance(record,dict):raise ValueError('invalid author record')
+        key=record.get('key','');quality=record.get('identity_quality')
+        if not isinstance(key,str) or not re.fullmatch(r'author:[a-f0-9]{64}',key) or key in authors:raise ValueError('duplicate or invalid author key')
+        if not isinstance(record.get('display_name'),str) or not record['display_name'].strip():raise ValueError('missing author name')
+        if quality=='facebook_id':
+            basis=record.get('facebook_author_id')
+            if not isinstance(basis,str) or not re.fullmatch(r'\d{1,30}',basis):raise ValueError('invalid author identity')
+        elif quality=='profile_url':
+            basis=record.get('profile_url','')
+            if not isinstance(basis,str):raise ValueError('invalid author profile')
+            url=urllib.parse.urlsplit(basis)
+            if url.scheme!='https' or url.hostname!='www.facebook.com' or url.query or url.fragment:raise ValueError('invalid author profile')
+        elif quality=='display_name_only':basis=None
+        else:raise ValueError('invalid author identity quality')
+        if basis and key!='author:'+hashlib.sha256(basis.encode()).hexdigest():raise ValueError('author identity hash mismatch')
+        authors[key]=record
+    group=payload['group']
+    def reference(owner,key):
+        author=owner.get('author_key')
+        if not author:return
+        if not isinstance(author,str) or owner.get('author_is_anonymous') or author not in authors:raise ValueError('dangling or anonymous author reference')
+        if authors[author]['identity_quality']=='display_name_only':
+            basis=group+'|'+key+'|'+str(owner.get('author') or '').strip()
+            if author!='author:'+hashlib.sha256(basis.encode()).hexdigest():raise ValueError('unscoped display-name identity')
+    for post in payload['posts']:
+        key=group+'|post:'+post['post_id']
+        if post.get('key')!=key:raise ValueError('invalid post graph key')
+        reference(post,key);comments={}
+        for comment in post.get('comments',[]):
+            if not isinstance(comment,dict):raise ValueError('invalid comment record')
+            ck=comment.get('key')
+            if not isinstance(ck,str) or not ck.startswith(key+'|') or ck in comments or comment.get('post_key')!=key:raise ValueError('invalid comment graph owner')
+            if not isinstance(comment.get('id'),str) or not comment['id'] or ck!=key+'|comment:'+comment['id']:raise ValueError('missing or inconsistent stable comment id')
+            comments[ck]=comment;reference(comment,ck)
+        for ck,comment in comments.items():
+            seen={ck};parent=comment.get('parent_comment_key')
+            while parent:
+                if not isinstance(parent,str):raise ValueError('invalid parent key')
+                if parent not in comments:raise ValueError('foreign or missing parent key')
+                if parent in seen:raise ValueError('parent cycle')
+                seen.add(parent);parent=comments[parent].get('parent_comment_key')
+
 def validate(payload):
     if not isinstance(payload,dict) or payload.get('schema')!='bur-collector/1':
         raise ValueError('unsupported schema')
@@ -35,8 +83,9 @@ def validate(payload):
     if len(ids)!=len(set(ids)):
         raise ValueError('duplicate post ids; preserve source and review')
     order=summary.get('discovery_order')
-    if not isinstance(order,list) or len(order)!=len(ids) or set(order)!=set(ids):
+    if not isinstance(order,list) or any(not isinstance(x,str) for x in order) or len(order)!=len(ids) or set(order)!=set(ids):
         raise ValueError('discovery order mismatch')
+    if payload.get('relational_schema'):validate_graph(payload)
     return group,ids
 
 def target(base):
@@ -75,6 +124,7 @@ class Client:
             time.sleep(min(8,2**attempt))
 
 def import_batch(path,client,receipt_dir):
+    target(client.base)
     path=Path(path);raw=path.read_bytes()
     if len(raw)>50*1024*1024:raise ValueError('batch exceeds 50 MiB')
     payload=json.loads(raw);group,ids=validate(payload)
@@ -89,22 +139,26 @@ def import_batch(path,client,receipt_dir):
     stored=client.request('/storage/v1/object/authenticated/bur-raw/'+encoded,method='GET',raw=True)
     if hashlib.sha256(stored).hexdigest()!=digest:
         raise ValueError('raw object checksum mismatch; database not called')
-    receipt=client.request('/rest/v1/rpc/bur_import_archived_json',{
+    graph=payload.get('relational_schema')=='bur-author-graph/1'
+    receipt=client.request('/rest/v1/rpc/'+('bur_import_archived_graph' if graph else 'bur_import_archived_json'),{
         'payload':payload,'source_filename':path.name,'storage_bucket':'bur-raw',
         'storage_path':object_path,'source_file_sha256':digest})
     if not isinstance(receipt,dict) or receipt.get('ok') is not True or not receipt.get('crawl_run_id'):
         raise ValueError('database acknowledgement missing')
     if receipt.get('source_file_sha256')!=digest or receipt.get('storage_path')!=object_path or receipt.get('archived') is not True:
         raise ValueError('database acknowledgement does not identify exact source')
-    verified=client.request('/rest/v1/rpc/bur_verify_import_receipt',{
+    if graph and receipt.get('relational_schema')!='bur-author-graph/1':raise ValueError('relational acknowledgement missing')
+    verified=client.request('/rest/v1/rpc/'+('bur_verify_graph_receipt' if graph else 'bur_verify_import_receipt'),{
         'p_run_id':receipt['crawl_run_id'],'p_group':group,'p_sha256':digest,'p_post_ids':ids})
     if not isinstance(verified,dict) or verified.get('verified') is not True or verified.get('post_count')!=len(ids):
         raise ValueError('database readback failed; batch remains unacknowledged locally')
+    if graph and verified.get('relational_verified') is not True:raise ValueError('relational database readback failed')
     result={'sha256':digest,'group':group,'batch_id':payload['job_summary']['id'],
             'crawl_run_id':receipt['crawl_run_id'],'post_count':len(ids),'verified':True,
             'partial_deep':bool(payload['job_summary'].get('deep_errors')) or
               int(payload['job_summary'].get('deep_done') or 0)<len(ids),
             'target':client.base}
+    if graph:result['relational_verified']=True
     directory=Path(receipt_dir);directory.mkdir(parents=True,exist_ok=True)
     # Receipt is never used to skip remote verification. Atomic replace survives a crash.
     out=directory/(digest+'.json');tmp=out.with_suffix('.tmp')

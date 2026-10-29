@@ -1,3 +1,9 @@
+# Актуальная поставка: Бур 0.5.24-alpha
+
+Ветка fix/bur-comprehensive-regressions, PR #4. [Полный итоговый отчёт](../docs/handoffs/BUR-0.5.24-REPORT.txt); [ZIP](../releases/Bur_0.5.24_install.zip); [LATEST.json](LATEST.json). Живой Facebook проверяет пользователь; production не менялся.
+
+Далее сохранена историческая передача старой версии.
+
 # Актуальная версия FB Бур: 0.5.5-alpha
 
 Каноническая ветка: `bur/canonical-0.5.5-alpha`.

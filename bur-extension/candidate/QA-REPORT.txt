@@ -1,12 +1,9 @@
-ВНУТРЕННИЙ КАНДИДАТ — НЕ РЕЛИЗ
-Блок 1 / 89af2d7: 26 локальных тестов и три CI success.
-Блок 2 / 8cad162: 31/31 локальных тестовых файлов и три CI success. Native installed source: 5-post raw -> delta 1 -> no-change, head/tail, реальные downloads/SHA256, restart — PASS; Facebook заменён fixtures.
-Блок 3: media-only/link-only/preview/temporary-video metadata, Unicode authors, подтверждённый new-only filter. Targeted tests и сохранность реальных JSON/DOM PASS; полный набор 33 test files прошёл все три CI success на 613efc7.
-НЕ ПОДТВЕРЖДЕНО: live Facebook, хронологическая сортировка ленты и полнота длинных веток Deep, изолированный mode-aware import/author graph. ZIP нет. Production и установленный watcher не менялись.
-См. ../../DEVELOPMENT-STATE.md
-
-Блок 4 (рабочие изменения): durable Deep progress / bounded multi-pass continuation / partial export guard; owned reply dialog без ограничения десять циклов. Targeted worker, 70-slice content protocol, export/content integration и 25-reply-expansion fixture PASS; На 91d9519 все три CI success, полный набор 37 файлов. Windows local full run НЕ засчитан: timeout fresh install; отдельный повтор actual popup/checkpoint/profile restart после изменения test driver PASS. All comments добавляется следующим блоком, ещё не подтверждён CI. All comments/feed chronology/live/import end-to-end остаются открыты.
-
-Блок 5: owned All comments menu selection + observed result, safe pause/menu cleanup, unknown selector evidence, incomplete pass on rejected selection. test_comment_sort.py и test_content_sort_integration.py PASS; repeated Deep/owned/long content tests PASS. Полный набор 39 файлов; все три CI блока 5 SUCCESS на 9b00909: 40810277908, 40810277786, 40810273724. Actual popup/checkpoint/profile restart test after driver stabilization PASS Windows.
-
-Блок 6 (unreleased): chronological feed proof + page-instance binding + recheck after document/order loss + partial unknown-order export. Composite live heading/dialog structure supported. Targeted Node/browser protocol tests PASS; полный Windows набор 42/42 PASS; на 06fc3a3 один CI был red из-за popup render race, два success. Test driver исправлен без ослабления проверок; actual native popup/checkpoint/profile restart PASS. Новый CI исправления ожидается.
+Бур 0.5.24-alpha — результаты проверки 29 октября 2026
+42/42 файла регрессионных тестов — PASS, Windows, Python/Playwright 1.55 + изолированный Chromium и Node 24.
+Проверены авторы/даты/ссылки/медиа, длинные тексты, 70 виртуализированных срезов, 25 раскрытий ответов, All comments, порядок New posts, checkpoint/restart и атомарные границы после реального downloads/SHA-256.
+Установленный пакет проходит отдельные сценарии: popup Start/pause/reload/resume/exact checkpoint/profile restart (тот же ID) и 5 постов -> 1 новый пост -> 0 новых, без сдвига исторического хвоста. Все ответы Facebook в этих тестах заменены локальными fixtures.
+Два пользовательских JSON: сохранены 70 постов и 539 комментариев, ссылки author_key валидны; отсутствующие исходные значения не восстановлены догадками.
+Отдельные проверки импортера/watcher/SQL находятся в репозитории; backend не включён в ZIP и не развёрнут.
+Живой Facebook и длительный сбор большой группы: НЕ ПРОВЕРЕНЫ этой поставкой. Пользователь проверяет самостоятельно. Не заявляется доказанная полнота любой произвольной группы; unknown/incomplete сохраняются как таковые.
+Production Supabase/WordPress и установленный watcher не менялись.
+Полный внешний отчёт: docs/handoffs/BUR-0.5.24-REPORT.txt в ветке fix/bur-comprehensive-regressions.
