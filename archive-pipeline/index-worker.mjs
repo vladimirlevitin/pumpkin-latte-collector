@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {randomUUID,createHash} from 'node:crypto';
 import {prepareUnits} from './chunks.mjs';
 
 export function stagingClient(base,key,fetcher=fetch){
@@ -23,8 +23,16 @@ export function geminiEmbedder(key,fetcher=fetch){
   return v;
  };
 }
-export async function indexBatch(batch,{rpc,embed,maxBatches=100}){
+export async function indexBatch(batch,{rpc,embed,maxBatches=100,sourceSha256=null}){
  if(batch?.job_summary?.stage!=='done'||batch.job_summary.checkpoint_post_id&&!batch.job_summary.checkpoint_found_at)throw Error('unverified_batch');
+ if(batch.relational_schema==='bur-author-graph/1'){
+  if(!/^[a-f0-9]{64}$/.test(sourceSha256||''))throw Error('exact_graph_source_hash_required');
+  const ids=await rpc('bur_graph_indexable_posts',{p_group:batch.group,p_batch_id:batch.job_summary.id,p_collector_version:batch.collector_version,p_sha256:sourceSha256});
+  const sourceIds=new Set(batch.posts.map(p=>String(p.post_id)));
+  if(!Array.isArray(ids)||new Set(ids).size!==ids.length||ids.some(id=>!sourceIds.has(id)))throw Error('invalid_graph_indexable_set');
+  if(!ids.length)return {ready:true,units:0,embedded:0,skipped_existing:batch.posts.length};
+  batch={...batch,posts:batch.posts.filter(p=>ids.includes(String(p.post_id)))};
+ }
  const units=prepareUnits(batch),postIds=batch.posts.map(x=>String(x.post_id));
  await rpc('bur_stage_prepare_units',{p_group:batch.group,p_post_ids:postIds,p_units:units});
  let stored=0,failed=0,stale=0;
@@ -47,11 +55,11 @@ if(import.meta.url===new URL(process.argv[1]||'file:/', 'file:/').href || proces
  const fs=await import('node:fs/promises');
  const args=process.argv.slice(2),file=args.find(x=>!x.startsWith('-'));
  if(!file)throw Error('Usage: node index-worker.mjs batch.json [--apply --url https://staging-project.supabase.co]');
- const batch=JSON.parse(await fs.readFile(file,'utf8'));
+ const raw=await fs.readFile(file),batch=JSON.parse(raw.toString('utf8'));
  if(!args.includes('--apply'))console.log(JSON.stringify({dry_run:true,group:batch.group,units:prepareUnits(batch).length}));
  else{
   const at=args.indexOf('--url'),base=at>=0?args[at+1]:null,key=process.env.BUR_STAGING_SECRET;
   if(!base||!key)throw Error('Explicit staging URL and BUR_STAGING_SECRET required');
-  console.log(JSON.stringify(await indexBatch(batch,{rpc:stagingClient(base,key),embed:geminiEmbedder(process.env.GEMINI_API_KEY)})));
+  console.log(JSON.stringify(await indexBatch(batch,{rpc:stagingClient(base,key),embed:geminiEmbedder(process.env.GEMINI_API_KEY),sourceSha256:createHash('sha256').update(raw).digest('hex')})));
  }
 }

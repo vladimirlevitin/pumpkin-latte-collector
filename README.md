@@ -1,8 +1,10 @@
 ## FB Бур: актуальное расширение Chrome
 
-Последняя сборка — **0.5.5-alpha**. [Скачать полный ZIP](releases/bur-collector-0.5.5-alpha-FULL.zip).
-[Состояние и передача контекста](bur-extension/HANDOFF.md) · [Версия и контрольная сумма](bur-extension/LATEST.json).
-16/16 тестов PASS; установка ZIP в отдельном Chromium проверена. Живой Facebook ещё не проверен.
+Последняя сборка в этой ветке — **0.5.24-alpha**. [Скачать ZIP](releases/Bur_0.5.24_install.zip).
+[Итоговый отчёт](docs/handoffs/BUR-0.5.24-REPORT.txt) · [Установка и границы проверки](RELEASE-0.5.24.md) · [Версия и SHA-256](bur-extension/LATEST.json).
+42/42 регрессионных файла PASS; загрузка распакованного ZIP в отдельном Chromium и сценарии checkpoint/restart/new-only update PASS. Живой Facebook проверяет пользователь. Обновляйте файлы в прежней папке без удаления расширения.
+
+Ниже — историческое описание прежнего проекта; установка Бура описана по ссылке выше.
 
 # Pumpkin Latte Collector
 

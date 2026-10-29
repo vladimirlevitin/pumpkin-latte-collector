@@ -1,11 +1,10 @@
 {
   "product": "FB Бур Chrome extension",
-  "version": "0.5.20-alpha",
-  "branch": "bur/canonical-0.5.20-alpha",
-  "source": "bur-extension/0.5.20-alpha",
-  "source_commit": "61140390969fc54c37746f3c313ba73741a981e5",
-  "zip": "releases/bur-collector-0.5.20-alpha-FULL.zip",
-  "sha256": "17fc03ee532d0d0b9b924e2665e49d044899673ae384857f0a3058c4362eaebd",
-  "tests": "run-tests.py PASS in GitHub Actions",
-  "live_facebook": "NOT TESTED; 0.5.20 replaces boundary-card rediscovery with same-document feed identity and recovers by checkpoint only after real feed loss"
+  "version": "0.5.24-alpha",
+  "branch": "fix/bur-comprehensive-regressions",
+  "source": "bur-extension/0.5.24-alpha",
+  "zip": "releases/Bur_0.5.24_install.zip",
+  "sha256": "84f9f4d62279bb73219b0d67d6bc5cf21259b24b38fdf7e6b127e140ef831ad4",
+  "tests": "candidate/run-tests.py; archive-pipeline tests; isolated installed ZIP fixture checks recorded in docs/handoffs/BUR-0.5.24-REPORT.txt",
+  "live_facebook": "USER TEST PENDING; no claim of universal live completeness"
 }

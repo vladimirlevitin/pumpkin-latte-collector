@@ -1,0 +1,13 @@
+'use strict';
+const assert=require('node:assert/strict'),C=require('../core.js');
+const text='Длинная запись 🧭\n'.repeat(5000),comment='Подробный ответ 🌄\n'.repeat(2000);
+const row={group:'any-group',post_id:'1700000000000000',post_text:text,post_text_quality:'body_selector',comments:[{id:'1700000000000001',text:comment,reaction_count:7,custom_source:{verified:false}}]};
+const normalized=C.normalizePost(row,row.group);
+assert.equal(normalized.post_text,text.trim());assert.equal(normalized.comments[0].text,comment.trim());
+assert.equal(normalized.comments[0].reaction_count,7);assert.deepEqual(normalized.comments[0].custom_source,{verified:false});
+let merged=C.mergePosts(normalized,{...row,comments:[{id:'1700000000000001',text:'Короткий ответ'}]},row.group);
+assert.equal(merged.comments[0].text,comment.trim());assert.equal(merged.comments[0].reaction_count,7);
+for(let i=0;i<24;i++)merged=C.mergePosts(merged,{...row,post_text:'Правка '+i,comments:[]},row.group);
+assert.ok(merged.text_variants.some(v=>v.text===text.trim()));
+assert.equal(merged.text_variants.length,25);
+console.log('PASS long Unicode post/comment text and unknown source fields survive normalization and repeated snapshots without silent character/variant limits');

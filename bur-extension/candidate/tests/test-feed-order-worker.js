@@ -1,0 +1,32 @@
+'use strict';
+const assert=require('node:assert/strict'),f=require('./worker-fixture.cjs')();
+const {spawn,extCall,tabs,makePost:p,feedSender,deepAll,exportSender,storage,posts}=f;
+(async()=>{
+ spawn();await extCall('start',{tabId:5,url:tabs.get(5).url,options:{maxPosts:5}});
+ await assert.rejects(extCall('collectFound',{tabId:5,url:tabs.get(5).url}),/не подтверждены/);
+ await extCall('rewindResult',{result:{ok:true}},feedSender());
+ let j=await extCall('status');assert.equal(j.stage,'stalled');assert.equal(j.discovered,0);assert.equal((await extCall('archiveStatus',{group:j.group})).head,null);
+ await extCall('resume',{tabId:5,url:tabs.get(5).url});
+ await extCall('rewindResult',{result:{ok:true,feed_order:{verified:true,order:'ranked'}}},feedSender());
+ assert.equal((await extCall('status')).stage,'stalled','a verified flag cannot turn ranked order into chronological evidence');
+ await extCall('resume',{tabId:5,url:tabs.get(5).url});
+ const stale=await extCall('rewindResult',{pageInstance:'foreign-doc',result:{ok:true,feed_order:{verified:true,order:'new_posts'}}},feedSender());assert.equal(stale.stale_document,true);
+ assert.equal((await extCall('status')).rewindPending,true);
+ await f.rewind();j=await extCall('status');assert.equal(j.feedOrder.page_instance,'feed-doc-1');assert.equal(j.feedOrder.order,'new_posts');
+ await extCall('discover',{pageInstance:'foreign-doc',posts:[p(10)]},feedSender());assert.equal((await extCall('status')).discovered,0);
+ const detail={tab:{id:5,url:p(10).permalink},frameId:0};await extCall('discover',{posts:[p(10)]},detail);assert.equal((await extCall('status')).discovered,0,'a permalink in the feed tab is not a root-feed proof');
+ await extCall('discover',{posts:[p(10),p(9)],step:1},feedSender());
+ f.setFeedPosition('replacement',0);
+ await extCall('feedOrderLost',{pageInstance:'feed-doc-1',feed_order:{status:'other_order'}},feedSender());assert.equal((await extCall('status')).discovered,2,'stale document cannot reset the current session');
+ await extCall('feedOrderLost',{feed_order:{status:'already_new_posts',verified:true,order:'new_posts'}},feedSender());
+ j=await extCall('status');assert.equal(j.rewindPending,true);assert.equal(j.feedOrder,null);assert.equal(j.deferredRows.length,2);assert.equal(posts.size,2);
+ spawn();await f.rewind();j=await extCall('status');assert.equal(j.feedOrder.page_instance,'replacement');
+ await extCall('discover',{posts:[8,7,6].map(p),step:1},feedSender());await deepAll();j=await extCall('status');assert.equal(j.stage,'exporting');
+ // Migrated/unknown-order exports retain raw data but cannot move durable boundaries.
+ const changed=structuredClone(j);changed.feedOrder=null;storage['burCollectorJob-v0520']=changed;
+ await extCall('exportComplete',{batchNumber:j.batchNumber,sessionId:j.id,downloadId:11,sha256:'a'.repeat(64)},exportSender());
+ j=await extCall('status');assert.equal(j.stage,'stalled');assert.equal(j.completedBatches,0);
+ const archive=await extCall('archiveStatus',{group:j.group});assert.equal(archive.head,null);assert.equal(archive.tail,null);
+ const receipts=Object.values(storage['burCollectorExportReceipts-v1']);assert.equal(receipts.length,1);assert.equal(receipts[0].incomplete,true);assert.equal(receipts[0].retained,true);assert.equal(posts.size,5);
+ console.log('PASS chronological feed proof gates root/Deep/export; ranked or stale proof cannot move boundaries; document replacement preserves drafts and requires fresh proof; unknown-order raw remains retained and partial');
+})().catch(error=>{console.error(error);process.exitCode=1;});

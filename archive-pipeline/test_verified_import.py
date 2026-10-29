@@ -75,4 +75,35 @@ class Tests(unittest.TestCase):
   payload=copy.deepcopy(PAYLOAD);payload['posts']*=2
   with self.assertRaises(ValueError):imp.validate(payload)
 
+class GraphValidationTests(unittest.TestCase):
+ def graph(self):
+  p=copy.deepcopy(PAYLOAD);p['relational_schema']='bur-author-graph/1'
+  post=p['posts'][0];pk=p['group']+'|post:'+post['post_id'];post['key']=pk
+  c=post['comments'][0];c.update(key=pk+'|comment:c1',post_key=pk,author='Same Label')
+  ak='author:'+hashlib.sha256((p['group']+'|'+c['key']+'|Same Label').encode()).hexdigest();c['author_key']=ak
+  p['authors']=[{'key':ak,'display_name':'Same Label','identity_quality':'display_name_only'}]
+  return p
+ def test_scoped_identity_and_parent_validation(self):
+  valid=self.graph();imp.validate(valid)
+  for change in ('wrong_scope','cycle','foreign_parent','foreign_owner','missing_author'):
+   p=copy.deepcopy(valid);c=p['posts'][0]['comments'][0]
+   if change=='wrong_scope':c['author']='Other Label'
+   elif change=='cycle':c['parent_comment_key']=c['key']
+   elif change=='foreign_parent':c['parent_comment_key']='other|comment:c2'
+   elif change=='foreign_owner':c['post_key']='other'
+   else:p['authors']=[]
+   with self.subTest(change=change),self.assertRaises(ValueError):imp.validate(p)
+ def test_numeric_identity_hash_is_enforced(self):
+  p=self.graph();a=p['authors'][0];a.update(identity_quality='facebook_id',facebook_author_id='123')
+  with self.assertRaisesRegex(ValueError,'hash mismatch'):imp.validate(p)
+  key='author:'+hashlib.sha256(b'123').hexdigest();a['key']=key;p['posts'][0]['comments'][0]['author_key']=key
+  imp.validate(p)
+ def test_untrusted_shapes_rejected_before_network(self):
+  for field,value in [('parent_comment_key',[]),('author_key',{}),('post_key',[])]:
+   p=self.graph();p['posts'][0]['comments'][0][field]=value
+   # Empty parent/author values represent absent references; use nonempty shapes.
+   if field=='parent_comment_key':p['posts'][0]['comments'][0][field]=['invalid']
+   if field=='author_key':p['posts'][0]['comments'][0][field]={'invalid':True}
+   with self.subTest(field=field),self.assertRaises(ValueError):imp.validate(p)
+
 if __name__=='__main__':unittest.main()

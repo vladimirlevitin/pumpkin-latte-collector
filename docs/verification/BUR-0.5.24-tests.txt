@@ -1,0 +1,198 @@
+Бур 0.5.24-alpha — завершённые локальные проверки. Все live Facebook responses в автоматических браузерных сценариях заменены fixtures. Личные исходные JSON/HTML не публикуются; аудит содержит только агрегаты.
+
+===== release-0524-regression.log =====
+test-archive-graph.js PASS PASS separate author records, legacy numeric author key compatibility, profile aliases, no same-name conflation, anonymous labels, parent keys, missing-parent evidence, immutable source
+
+test-archive-state.js PASS PASS independent head/tail, durable ack, crash replay, unfinished update, empty update, exact stop boundary, import receipt, legacy state and group isolation
+
+test-boundary-commit-failure.js PASS PASS storage failure after successful download leaves both boundaries/job/history unchanged; service-worker restart and same receipt replay commit once without data loss
+
+test-checkpoint-seek.js PASS delayed virtualized 4000 cards { found: true, stalled: false, seen: 3218, rewound: 0 }
+group header with no cards yet { found: true, stalled: false, seen: 29, rewound: 0 }
+rewind on overshoot { found: true, stalled: false, seen: 3218, rewound: 1 }
+variable heights/overlapping virtual windows { found: true, stalled: false, seen: 3219, rewound: 0 }
+pause/resume { found: true, stalled: false, seen: 3218, rewound: 1 }
+target absent { found: false, stalled: true, seen: 149, rewound: 0 }
+PASS exact-ID scan, every intermediate slice, no numeric chronology or absent-target success
+
+test-checkpoint-worker.js PASS PASS 2100 exact-ID observations, no 36-step bypass, worker restart, pause/resume, offscreen target, absent target safe stall, exact boundary
+
+test-comment-upgrade.js PASS PASS: expanded comments replace earlier truncated versions with same ID without losing author/link
+
+test-content-preservation.js PASS PASS long Unicode post/comment text and unknown source fields survive normalization and repeated snapshots without silent character/variant limits
+
+test-deep-progress-worker.js PASS PASS durable Deep snapshots, foreign sender rejection, pause/restart retention, multi-pass continuation without index advance, safe no-gain stall and final union of virtualized comment slices
+
+test-feed-order-worker.js PASS PASS chronological feed proof gates root/Deep/export; ranked or stale proof cannot move boundaries; document replacement preserves drafts and requires fresh proof; unknown-order raw remains retained and partial
+
+test-incremental-worker.js PASS PASS full worker: verified first root, overflow replay, independent head/tail, multi-batch updates, pause/restart, no-change pass, legacy-tail baseline bridge, group isolation, offscreen rejection and historical resume
+
+test-pinned-boundaries.js PASS PASS pinned post cannot become initial head or terminate an update; normal exact boundary is required
+
+test-recovery-drafts.js PASS PASS recovery retains unexported snapshots across worker/document restart even when those posts move above the confirmed checkpoint
+
+test-release.js PASS PASS manifest references, version alignment, storage compatibility; scroll identical; Deep target/obstruction/scroll guards retained with durable progress and bounded continuation; per-group mode UI intentionally added; relational export intentionally additive; download acknowledgment intentionally strengthened; core enhanced for post metadata to canonical baseline
+
+test-scroll.js PASS PASS: feed scroll + verified rewind-to-top diagnostics
+
+test-update-new-only.js PASS PASS new-only update skips confirmed old posts promoted above the old head and preserves their data; only newly observed publication enters Deep/export
+
+test-worker.js PASS PASS: same live feed document continues across b0001/b0002 without boundary rediscovery; only real document loss triggers checkpoint recovery
+
+test_059_edges.py PASS PASS: verified URL fallback succeeds and overlay diagnostics are structured
+
+test_comment_sort.py PASS PASS comment sorting requires an owned visible menu and observed selection; foreign/ambiguous menus, pause and unsupported layout never claim all-comments coverage
+
+test_comments_dom.py PASS PASS: detailed DOM captures isolated text, visible author/link, expands more comments; no invented parent
+
+test_content_feed_order.py PASS PASS real content verifies New posts before discovery, rewinds after changing order, and rejects absent or stale-document proof without collecting
+
+test_content_integration.py PASS PASS: real content.js in local Chromium navigated target post, clicked more comments, captured 2 authors/texts and sent deepSnapshot once
+
+test_content_sort_integration.py PASS PASS real content selects All comments and captures newly exposed data; unconfirmed selection produces incomplete pass, never final snapshot
+
+test_deep_multi_pass.py PASS PASS real content protocol traverses 70 virtualized slices across multiple bounded passes, preserves every comment through durable snapshots, and dry-run inspection performs no clicks
+
+test_download_commit.py PASS PASS actual Chromium download bytes/hash, atomic job/checkpoint/history/receipt commit, local snapshot retention and browser restart; no Facebook/backend contacted
+
+test_export_browser.py PASS PASS: export browser download, 53 posts/pagination/comments, repeat download, empty archive, ignored/malformed reply and API error
+
+test_extension_export.py PASS PASS: real extension exports current continuous-session batch from IndexedDB without touching Facebook tabs
+
+test_feed_order.py PASS PASS composite feed heading and owned dialog support verified New posts; foreign/ambiguous panels, pause, nested-post controls and unconfirmed selections fail closed
+
+test_fresh_install_checkpoint.py PASS setup: installed extension control ready
+setup: opening actual toolbar popup
+checkpoint: paused persisted
+restart: extension control ready
+PASS fresh install + aligned ping + actual popup Start + persistence + page reload + resume + exact checkpoint + profile restart, same extension ID
+
+test_installed_incremental.py PASS state ('discover', 0, 0)
+state ('deep', 0, 0)
+state ('deep', 1, 0)
+state ('deep', 2, 0)
+state ('deep', 3, 0)
+state ('deep', 4, 0)
+state ('exporting', 5, 0)
+state ('discover', 0, 1)
+state ('discover', 0, 0)
+state ('deep', 0, 0)
+state ('exporting', 1, 0)
+state ('done', 0, 1)
+state ('discover', 0, 0)
+state ('done', 0, 0)
+PASS installed Chromium: first root -> Deep -> real 5-post download -> pause -> new root -> 1-post delta -> unchanged historical tail -> no-change update; author graph/date/link data preserved, all Facebook traffic replaced by fixtures
+
+test_live054_regressions.py PASS PASS: 218 real reply permalinks; exact parent/reply case; author/body/empty; version; safe target vs foreign dialog
+
+test_long_reply_dialog.py PASS PASS: 25 successive reply expansions exceed former ten-cycle limit and all replies survive
+
+test_metadata_links_media.py PASS PASS own post/comment authors, explicit date evidence, unknown date precision, links, link-only fallback, media ownership/filtering/deduplication/video and merge preservation
+
+test_modal_browser.py PASS PASS: Facebook photo modal => blocked, no background scroll; no image/reply clicks in discovery; feed resumes after user closes; small menu ignored
+
+test_nested_replies_dom.py PASS PASS: group-user authors + reply_comment_id + parent_id
+
+test_owned_dialog_progress.py PASS PASS owned thread persists comments before pause/detach, closes only its dialog, and reports ineffective expansion as incomplete
+
+test_permalink_fallback.py PASS PASS: permalink post without role=article still gets a fallback root and comments
+
+test_popup_flow.py PASS PASS: popup buttons: Start->discover, Collect->deep with NO second Resume, Pause, Export
+
+test_post_detail_browser.py PASS PASS: intended permalink dialog + nested wrappers allowed; photo-only overlay rejected
+
+test_reply_dialog_integration.py PASS PASS: collector-opened reply dialog harvested and closed without failing post
+
+test_scroll_browser.py PASS {"chromium_real_scroll": "PASS", "feed_scrolled_pixels": 490, "container": "feed ancestor", "not_document": true}
+
+test_short_post_reply_dialog.py PASS PASS: collector-opened reply dialog harvested and closed without failing post
+
+test_small_media_posts.py PASS PASS short photo-only/link-only posts, empty text preserved, blob video metadata without pretending it is a permanent URL, post/comment ownership and repeated snapshot retention
+
+
+===== release-0524-pipeline.log =====
+
+PASS PostgreSQL receipt SQL: exact IDs/hash/group/count, missing records, denied anon/authenticated
+test-receipt.mjs EXIT=0
+PASS chunk reconstruction, replies, repeat preparation, leases, embedding commit, stale result rejection, retirement without deletion, anon denied
+test-index.mjs EXIT=0
+PASS PostgreSQL + pgvector: hybrid RRF, lexical fallback, topics, exact source, group isolation, anon denied, dimension guard
+test-search.mjs EXIT=0
+PASS API: verified Auth user, no trusted client identity, group denial, CORS, keyword fallback, production guard
+test-api.mjs EXIT=0
+PASS local E2E: raw JSON -> hash-verified Storage -> actual archive import -> receipt -> repeat/no duplicates -> reply relations -> chunks -> leased embeddings -> authorized API -> keyword results
+{"posts":1,"comments":2,"search_units":6,"embeddings":6,"provider":"deterministic TEST VECTORS; not a live semantic-quality test"}
+test-e2e.mjs EXIT=0
+PASS actual PostgreSQL + Python watcher: exact raw/hash, post/comment authors, scoped labels, comment date/links/media, reply-before-parent, lost graph readback/restart/idempotency, new-only delta/all-existing delta, atomic rollback and denied public roles
+test-author-graph.mjs EXIT=0
+PASS actual PostgreSQL + Python watcher: exact raw/hash, post/comment authors, scoped labels, comment date/links/media, reply-before-parent, lost graph readback/restart/idempotency, new-only delta/all-existing delta, atomic rollback and denied public roles
+test-author-graph.mjs EXIT=0 (full old-record preservation fix verified)
+
+===== release-0524-package.log =====
+{
+  "zip": "[task-workspace]\\outputs\\Bur_0.5.24_install.zip",
+  "sha256": "84f9f4d62279bb73219b0d67d6bc5cf21259b24b38fdf7e6b127e140ef831ad4",
+  "files": 19,
+  "unpacked": "[task-workspace]\\work\\install-check-0524",
+  "canonical": "[task-workspace]\\work\\collector\\bur-extension\\0.5.24-alpha"
+}
+
+===== release-0524-zip-checkpoint.log =====
+setup: installed extension control ready
+setup: opening actual toolbar popup
+checkpoint: paused persisted
+restart: extension control ready
+PASS fresh install + aligned ping + actual popup Start + persistence + page reload + resume + exact checkpoint + profile restart, same extension ID
+
+===== release-0524-zip-incremental.log =====
+state ('discover', 0, 0)
+state ('deep', 0, 0)
+state ('deep', 1, 0)
+state ('deep', 2, 0)
+state ('deep', 3, 0)
+state ('deep', 4, 0)
+state ('exporting', 5, 0)
+state ('discover', 0, 1)
+state ('discover', 0, 0)
+state ('deep', 0, 0)
+state ('exporting', 1, 0)
+state ('done', 0, 1)
+state ('discover', 0, 0)
+state ('done', 0, 0)
+PASS installed Chromium: first root -> Deep -> real 5-post download -> pause -> new root -> 1-post delta -> unchanged historical tail -> no-change update; author graph/date/link data preserved, all Facebook traffic replaced by fixtures
+
+===== release-0524-private-json.log =====
+{
+  "version": "0.5.22-alpha",
+  "sha256": "d264fd22a516fc6458bf544f5426bfc91d0a348ef61f38423e000127108566ef",
+  "posts": 50,
+  "comments": 441,
+  "postAuthors": 0,
+  "postTimestamps": 0,
+  "dateLabels": 0,
+  "media": 211,
+  "replyParents": 233,
+  "emptyComments": 8,
+  "commentLinksFields": 0,
+  "unknownCompleteness": 50,
+  "relationalAuthors": 224,
+  "relationalAuthorReferences": "PASS",
+  "preservation": "PASS"
+}
+{
+  "version": "0.5.23-alpha",
+  "sha256": "e92823cf7248cf1948d826c08ef226b904ef437a189874006c8a2071dc3861b0",
+  "posts": 20,
+  "comments": 98,
+  "postAuthors": 20,
+  "postTimestamps": 0,
+  "dateLabels": 1,
+  "media": 72,
+  "replyParents": 37,
+  "emptyComments": 4,
+  "commentLinksFields": 0,
+  "unknownCompleteness": 20,
+  "relationalAuthors": 90,
+  "relationalAuthorReferences": "PASS",
+  "preservation": "PASS"
+}
