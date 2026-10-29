@@ -23,3 +23,37 @@ jobs:
       - run: python -m playwright install --with-deps chromium
       - run: python bur-extension/candidate/run-tests.py
       - run: python archive-pipeline/test_watcher.py
+
+      - name: Package diagnostic extension after tests
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib, json, zipfile
+          src=Path('bur-extension/candidate')
+          runtime=['manifest.json','background.js','core.js','archive-state.js','archive-graph.js','checkpoint-seek.js','feed-scroll.js','content.js','export.html','export.js','popup.html','popup.js','icons/16.png','icons/48.png','icons/128.png']
+          for name in runtime:
+              assert (src/name).is_file(), name
+          manifest=json.loads((src/'manifest.json').read_text())
+          assert manifest['version']=='0.5.24'
+          assert manifest['version_name']=='0.5.24-alpha'
+          assert "burCollectorJob-v0520" in (src/'background.js').read_text()
+          assert "bur-collector-v05" in (src/'background.js').read_text()
+          assert "permalink_card_unresolved" in (src/'content.js').read_text()
+          output=Path('Bur_0.5.24_diagnostic_PR5_install.zip')
+          with zipfile.ZipFile(output,'w',compression=zipfile.ZIP_DEFLATED) as z:
+              for name in runtime:z.write(src/name,name)
+          with zipfile.ZipFile(output) as z:
+              assert z.testzip() is None
+              assert 'manifest.json' in z.namelist()
+              assert sorted(z.namelist())==sorted(runtime)
+          digest=hashlib.sha256(output.read_bytes()).hexdigest()
+          Path('Bur_0.5.24_diagnostic_PR5_SHA256.txt').write_text(digest+'  '+output.name+'\\n')
+          print('ZIP SHA256:',digest)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Bur-0.5.24-diagnostic-PR5-install
+          path: |
+            Bur_0.5.24_diagnostic_PR5_install.zip
+            Bur_0.5.24_diagnostic_PR5_SHA256.txt
+          if-no-files-found: error
