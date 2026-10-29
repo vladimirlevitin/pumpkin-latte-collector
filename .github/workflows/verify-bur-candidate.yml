@@ -57,3 +57,51 @@ jobs:
             Bur_0.5.24_diagnostic_PR5_install.zip
             Bur_0.5.24_diagnostic_PR5_SHA256.txt
           if-no-files-found: error
+
+      - name: Checkout original Collector 0.1.1
+        uses: actions/checkout@v4
+        with:
+          ref: fix/longrun-feed-collector-v0.1.1
+          path: legacy-source
+      - name: Package isolated legacy Collector for backpackIL
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json,zipfile,hashlib,re
+          src=Path('legacy-source/longrun-extension')
+          names=['manifest.json','background.js','content.js','core.js','popup.html','popup.js']
+          files={p:(src/p).read_text(encoding='utf-8') for p in names}
+          manifest=json.loads(files['manifest.json'])
+          manifest['name']='Legacy Collector 0.1.1 - Backpack control'
+          manifest['description']='Isolated manual control test of the original TL collector on backpackIL; Supabase disabled'
+          manifest['content_scripts'][0]['matches']=['https://www.facebook.com/groups/backpackIL*']
+          manifest['host_permissions']=['https://www.facebook.com/*']
+          files['manifest.json']=json.dumps(manifest,ensure_ascii=False,indent=2)
+          def once(file,old,new):
+              assert files[file].count(old)>0,(file,old)
+              files[file]=files[file].replace(old,new)
+          once('background.js','pumpkinlatte','backpackIL')
+          once('content.js','pumpkinlatte','backpackIL')
+          once('core.js',"const DB_NAME='pumpkin_latte_archive';","const DB_NAME='backpack_legacy_control_archive';")
+          once('core.js',"const INGEST_URL='https://ltznpjfnkpydautbsrej.supabase.co/functions/v1/collector-ingest';","const INGEST_URL='https://disabled.invalid/collector-ingest';")
+          files['core.js']=re.sub(r"const syncablePostKey=k=>[^;]*;",'const syncablePostKey=k=>false;',files['core.js'],count=1)
+          assert 'const syncablePostKey=k=>false;' in files['core.js']
+          assert 'https://ltznpjfnkpydautbsrej.supabase.co' not in files['core.js']
+          assert 'https://www.facebook.com/groups/backpackIL*' in files['manifest.json']
+          assert 'pumpkinlatte' not in files['background.js']+files['content.js']
+          out=Path('Legacy_Collector_0.1.1_Backpack_CONTROL.zip')
+          with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:
+              for name in names:z.writestr(name,files[name])
+          with zipfile.ZipFile(out) as z:
+              assert z.testzip() is None and sorted(z.namelist())==sorted(names)
+              assert json.loads(z.read('manifest.json'))['version']=='0.1.1'
+          Path('Legacy_Collector_0.1.1_Backpack_README.txt').write_text('CONTROL TEST ONLY. Original 0.1.1 extraction logic. Config patched for backpackIL. Supabase disabled, isolated IndexedDB name. Install by extracting ZIP and Load unpacked as a NEW extension. Do NOT delete Bur. Pause Bur before test. Export JSON manually; do not press clear.\\n')
+          print('Legacy control ZIP sha256:',hashlib.sha256(out.read_bytes()).hexdigest())
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Legacy-Collector-0.1.1-Backpack-CONTROL
+          path: |
+            Legacy_Collector_0.1.1_Backpack_CONTROL.zip
+            Legacy_Collector_0.1.1_Backpack_README.txt
+          if-no-files-found: error
