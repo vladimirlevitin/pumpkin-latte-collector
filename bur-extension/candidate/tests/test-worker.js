@@ -54,7 +54,7 @@ async function deepAll(){let j=await extCall('status');while(j.stage==='deep'){c
  // A failed post may export raw evidence, but must not move the historical checkpoint.
  const failedPostId=j.queue[j.index];
  await extCall('deepSnapshot',{post:{...makePost(Number(failedPostId)-1700000000000000),comments:[{id:'visible-'+failedPostId,text:'retained discovery comment',author:'A'}]},fallback:'url_identity_existing_discovery',coverage:null},deepSender(j));
- assert.equal(posts.get('backpackIL|'+failedPostId)?.deep?.status,'failed','fallback must not count as completed Deep');
+ assert.equal([...posts.values()].find(p=>String(p.post_id)===failedPostId)?.deep?.status,'failed','fallback must not count as completed Deep');
  await deepAll();j=await extCall('status');assert.equal(j.stage,'exporting');assert.equal(j.deepErrors,1);
  await extCall('exportComplete',{batchNumber:2,sessionId:j.id,sha256:'c'.repeat(64),downloadId:12,filename:'partial.json'},exportSender());
  j=await extCall('status');assert.equal(j.stage,'stalled');assert.equal(j.queue.length,1);assert.equal(j.batchDeepTotal,5);
