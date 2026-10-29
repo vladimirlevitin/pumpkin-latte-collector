@@ -1,6 +1,8 @@
 ВНУТРЕННИЙ КАНДИДАТ — НЕ РЕЛИЗ
 Блок 1 / 89af2d7: 26 локальных тестов и три CI success.
 Блок 2 / 8cad162: 31/31 локальных тестовых файлов и три CI success. Native installed source: 5-post raw -> delta 1 -> no-change, head/tail, реальные downloads/SHA256, restart — PASS; Facebook заменён fixtures.
-Блок 3: media-only/link-only/preview/temporary-video metadata, Unicode authors, подтверждённый new-only filter. Targeted tests и сохранность реальных JSON/DOM PASS; полный актуальный набор 33 test files ещё должен пройти CI.
+Блок 3: media-only/link-only/preview/temporary-video metadata, Unicode authors, подтверждённый new-only filter. Targeted tests и сохранность реальных JSON/DOM PASS; полный набор 33 test files прошёл все три CI success на 613efc7.
 НЕ ПОДТВЕРЖДЕНО: live Facebook, хронологическая сортировка ленты и полнота длинных веток Deep, изолированный mode-aware import/author graph. ZIP нет. Production и установленный watcher не менялись.
 См. ../../DEVELOPMENT-STATE.md
+
+Блок 4 (рабочие изменения): durable Deep progress / bounded multi-pass continuation / partial export guard; owned reply dialog без ограничения десять циклов. Targeted worker, 70-slice content protocol, export/content integration и 25-reply-expansion fixture PASS; полный текущий прогон выполняется. All comments/feed chronology/live/import end-to-end остаются открыты.

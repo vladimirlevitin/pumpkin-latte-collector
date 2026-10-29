@@ -272,7 +272,7 @@
   // Do not click photo-grid overlays, links, or the Facebook dialog itself.
   // Reconnaissance expands ONLY the body; reply/comment expansion is allowed
   // later in the deep phase, where a single permalink is already selected.
-  function expandVisible(nodes,maxClicks=16,mode='post') {
+  function expandVisible(nodes,maxClicks=16,mode='post',dryRun=false) {
     let clicks=0;
     const bodySelectors='[data-ad-comet-preview="message"], [data-ad-preview="message"], [data-testid="post_message"]';
     const more=/^(?:Ещё|See more|עוד)$/iu;
@@ -310,7 +310,7 @@
         if(el.querySelector('img,video,svg[aria-label]'))continue;
         const label=String(el.getAttribute('aria-label')||'').toLowerCase();
         if(/фото|photo|изображени|image|gallery|галере|показать все|view all/.test(label))continue;
-        try{el.click();clicks++;}catch(_){ }
+        try{if(!dryRun)el.click();clicks++;}catch(_){ }
       }
     }
     return clicks;

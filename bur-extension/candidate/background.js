@@ -212,7 +212,7 @@ async function resume(tabId,url){
  if(tabId!==feedId(j))throw Error('Сессия привязана к исходной вкладке ленты '+j.group+'. Вернитесь в неё.');
  if(groupOf(url)!==j.group)throw Error('Сессия привязана к группе '+j.group+'. Текущая вкладка открыта в другой группе.');
  if(j.archiveRunStarted)await archiveJob(j,state=>A.resume(state,j.id));
- j.paused=false;j.resumeCount=(j.resumeCount||0)+1;
+ j.deepNoGainPasses=0;j.paused=false;j.resumeCount=(j.resumeCount||0)+1;
  if(j.stage==='stalled'){j.stage=j.stall?.resumeStage||'discover';j.stall=null;}
  await setJob(j);
  if(j.readyForDeep){j.readyForDeep=false;await beginDeep(j,'сохранённый участок');}
@@ -411,6 +411,7 @@ async function navigateCurrent(j){
  let tab;try{tab=await ensureDeepTab(j);}catch(e){return stall(j,'Не удалось создать deep-вкладку',{error:safeError(e)},'deep');}
  const url=C.canonicalUrl(j.group,id);
  if(j.redirectPostId!==id){j.redirectPostId=id;j.redirectRecoveries=0;}
+ if(j.deepTrackingId!==id){j.deepTrackingId=id;j.deepPasses=0;j.deepNoGainPasses=0;}
  const already=postIdOf(tab.url,j.group)===id;j.navStartedAt=now();j.currentId=id;j.deepPhase=already?'READY':'NAVIGATING';j.note='Пакет '+j.batchNumber+': deep '+(j.index+1)+'/'+j.queue.length+'. Feed-вкладка остаётся на месте.';await setJob(j);
  if(!already)await chrome.tabs.update(j.deepTabId,{url});else {try{await ensureContent(j.deepTabId,j.group);}catch{}await notifyTab(j.deepTabId);}
 }
@@ -421,9 +422,28 @@ async function recoverDeepRedirect(j,tabUrl){
  if(j.redirectRecoveries<=3){const url=C.canonicalUrl(j.group,id);j.deepPhase='NAVIGATING';j.navStartedAt=now();j.note='Пакет '+j.batchNumber+': deep '+(j.index+1)+'/'+j.queue.length+'; автовозврат '+j.redirectRecoveries+'/3';await setJob(j);await chrome.tabs.update(j.deepTabId,{url});return true;}
  j.redirectRecoveries=0;return failDeep({id,error:'Facebook 4 раза подряд перенаправил deep-вкладку'},{tab:{id:j.deepTabId,url:tabUrl}});
 }
-async function deepState(msg,sender,phase){const j=await getJob();if(!j||j.stage!=='deep'||j.paused||senderRole(j,sender)!=='deep')return {ignored:true};const id=j.queue[j.index];if(String(msg.id)!==String(id)||postIdOf(sender.tab?.url,j.group)!==id)return {ignored:true};j.deepPhase=phase;j.lastDeepProgressAt=now();if(phase==='READY')j.navReadyAt=now();await setJob(j);return j;}
+async function deepState(msg,sender,phase){const j=await getJob();if(!j||j.stage!=='deep'||j.paused||senderRole(j,sender)!=='deep')return {ignored:true};const id=j.queue[j.index];if(String(msg.id)!==String(id)||postIdOf(sender.tab?.url,j.group)!==id)return {ignored:true};j.deepPhase=phase;j.lastDeepProgressAt=now();if(phase==='READY')j.navReadyAt=now();if(phase==='EXPANDING')j.deepPassStartHash=deepSignature(await getOne(keyOf(j.group,id)));await setJob(j);return j;}
 async function deepMismatch(msg,sender){const j=await getJob();if(!j||j.stage!=='deep'||j.paused||senderRole(j,sender)!=='deep')return {ignored:true};const id=j.queue[j.index];if(String(msg.id)!==String(id))return {ignored:true};if(j.deepPhase==='NAVIGATING')return {waiting:true,expected:id,actual:msg.actual||null};return recoverDeepRedirect(j,sender.tab?.url||'');}
-async function completeDeep(msg,sender){const j=await getJob();if(!j||j.stage!=='deep'||j.paused||senderRole(j,sender)!=='deep')return {ignored:true};const id=j.queue[j.index];if(String(msg.post?.post_id||'')!==String(id)||postIdOf(sender.tab?.url,j.group)!==id)return {ignored:true};const row=C.normalizePost(msg.post,j.group);await putMany([row],j.group);const merged=await getOne(row.key);merged.deep={status:'captured_unverified',at:new Date().toISOString(),visible_comment_count:merged.comments?.length||0,completeness:'unknown_not_all_threads_verified',scrolled:Number(msg.scrolled)||0,expanded:Number(msg.expanded)||0,fallback:msg.fallback||null};await putOne(merged);j.index++;j.deepDone++;j.lastSeen=now();await setJob(j);if(j.index>=j.queue.length)await finishBatch(j);else await navigateCurrent(j);return {ok:true,index:j.index};}
+function deepSignature(row){return C.hash(JSON.stringify([row?.post_text||'',(row?.comments||[]).map(c=>[c.id,c.text,c.text_is_partial,c.parent_id])]));}
+async function progressDeep(msg,sender){
+ const j=await getJob();if(!j||!['deep','stalled'].includes(j.stage)||j.stage==='stalled'&&j.stall?.resumeStage!=='deep'||senderRole(j,sender)!=='deep')return {ignored:true};
+ const id=j.queue[j.index];if(String(msg.post?.post_id||'')!==String(id)||postIdOf(sender.tab?.url,j.group)!==id)return {ignored:true};
+ const row=C.normalizePost(msg.post,j.group);if(row.group!==j.group)return {ignored:true};await putMany([row],j.group);const merged=await getOne(row.key);
+ merged.deep={...merged.deep,status:'in_progress',at:new Date().toISOString(),completeness:'unknown_not_all_threads_verified',visible_comment_count:merged.comments?.length||0,progress_cycle:Number(msg.cycle)||0};await putOne(merged);
+ j.lastDeepProgressAt=now();j.lastSeen=now();await setJob(j);
+ return {captured:true,paused:Boolean(j.paused),stage:j.stage,comment_count:merged.comments?.length||0};
+}
+async function endDeepPass(msg,sender){
+ const progress=await progressDeep(msg,sender);if(!progress.captured||progress.paused)return progress;
+ const j=await getJob(),row=await getOne(keyOf(j.group,j.queue[j.index]));
+ j.deepPasses=(j.deepPasses||0)+1;
+ const gained=deepSignature(row)!==j.deepPassStartHash||Number(msg.scrolled)>0;
+ j.deepNoGainPasses=gained?0:(j.deepNoGainPasses||0)+1;j.deepPhase='READY';j.deepCoverage=msg.coverage||null;
+ if(msg.coverage?.settled&&msg.coverage?.known_incomplete||j.deepNoGainPasses>=3)return stall(j,'Обсуждение ещё не раскрыто полностью; промежуточные данные сохранены, граница не сдвинута',{coverage:msg.coverage||null,passes:j.deepPasses},'deep');
+ j.note='Сохраняю длинное обсуждение: проход '+j.deepPasses+', комментариев '+(row?.comments?.length||0)+'. Тот же пост продолжается.';
+ await setJob(j);await notifyTab(deepId(j));return {continue:true,comment_count:row?.comments?.length||0};
+}
+async function completeDeep(msg,sender){const j=await getJob();if(!j||j.stage!=='deep'||j.paused||senderRole(j,sender)!=='deep')return {ignored:true};const id=j.queue[j.index];if(String(msg.post?.post_id||'')!==String(id)||postIdOf(sender.tab?.url,j.group)!==id)return {ignored:true};const row=C.normalizePost(msg.post,j.group);if(row.group!==j.group)return {ignored:true};await putMany([row],j.group);const merged=await getOne(row.key);merged.deep={status:'captured_unverified',at:new Date().toISOString(),visible_comment_count:merged.comments?.length||0,completeness:'unknown_not_all_threads_verified',coverage:msg.coverage||null,passes:(j.deepPasses||0)+1,scrolled:Number(msg.scrolled)||0,expanded:Number(msg.expanded)||0,fallback:msg.fallback||null};await putOne(merged);j.index++;j.deepDone++;j.lastSeen=now();await setJob(j);if(j.index>=j.queue.length)await finishBatch(j);else await navigateCurrent(j);return {ok:true,index:j.index};}
 async function failDeep(msg,sender){const j=await getJob();if(!j||j.stage!=='deep'||j.paused||sender?.tab?.id!==deepId(j))return {ignored:true};const id=j.queue[j.index];if(String(msg.id)!==String(id))return {ignored:true};const p=await getOne(keyOf(j.group,id));if(p){p.deep={status:'failed',error:String(msg.error||'unknown').slice(0,240),at:new Date().toISOString(),diagnostics:msg.details||null};await putOne(p);}j.deepErrors++;j.index++;await setJob(j);if(j.index>=j.queue.length)await finishBatch(j);else await navigateCurrent(j);return {ok:true,index:j.index};}
 async function openExport(j){const url=chrome.runtime.getURL('export.html')+'?auto=1&batch='+j.batchNumber+'&session='+j.id;let tab=null;if(j.exportTabId){try{tab=await chrome.tabs.get(j.exportTabId);}catch{}}if(tab)await chrome.tabs.update(j.exportTabId,{url,active:false});else{tab=await chrome.tabs.create({url,active:false});if(tab?.id)j.exportTabId=tab.id;}j.exportStartedAt=now();await setJob(j);return j;}
 async function finishBatch(j){
@@ -478,7 +498,7 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{serial(async()=
   const role=senderRole(j,sender);
   if(msg.type==='status')return role?{...j,tabRole:role}:null;
   if(['discover','rewindResult','endDiscovery'].includes(msg.type)&&role!=='feed')return {ignored:true};
-  if(['deepReady','deepExpanding','deepMismatch','deepSnapshot','deepError'].includes(msg.type)&&role!=='deep')return {ignored:true};
+  if(['deepReady','deepExpanding','deepMismatch','deepProgress','deepPassEnd','deepSnapshot','deepError'].includes(msg.type)&&role!=='deep')return {ignored:true};
   if(msg.type==='obstructed'&&!role)return {ignored:true};
   if(['start','resume','collectFound','pause','resetCheckpoint','archiveStatus'].includes(msg.type))return {ignored:true};
  }
@@ -497,6 +517,8 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{serial(async()=
   case 'deepReady':return deepState(msg,sender,'READY');
   case 'deepExpanding':return deepState(msg,sender,'EXPANDING');
   case 'deepMismatch':return deepMismatch(msg,sender);
+  case 'deepProgress':return progressDeep(msg,sender);
+  case 'deepPassEnd':return endDeepPass(msg,sender);
   case 'deepSnapshot':return completeDeep(msg,sender);
   case 'deepError':return failDeep(msg,sender);
   case 'exportSlice':{

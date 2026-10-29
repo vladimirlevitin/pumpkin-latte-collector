@@ -47,19 +47,26 @@ function closeOwnedDialog(dialog){
  return !dialog.isConnected;
 }
 async function harvestOwnedCommentDialog(dialog,job,expected){
- let temp=null,unchanged=0,lastCount=0;
- for(let i=0;i<10&&dialog?.isConnected;i++){
+ let temp=null,unchanged=0,lastSignature='',paused=false,blocked=false,settled=false;
+ while(dialog?.isConnected){
+  const current=await send('status');
+  if(!current||current.id!==job.id||current.paused||current.stage!=='deep'||current.queue?.[current.index]!==expected){paused=true;break;}
   const comments=C.extractVisibleComments(dialog);
   if(comments.length)temp=C.mergePosts(temp,{group:job.group,post_id:expected,permalink:C.canonicalUrl(job.group,expected),post_text:'',comments,collector:C.collector},job.group);
-  const count=temp?.comments?.length||0;
-  const clicks=C.expandVisible([dialog],4,'deep');
+  const signature=JSON.stringify((temp?.comments||[]).map(c=>[c.id,c.text,c.text_is_partial,c.parent_id]));
+  if(temp){const saved=await send('deepProgress',{id:expected,post:temp,source:'owned_reply_dialog'});if(saved?.paused||saved?.ignored||saved?.stage&&saved.stage!=='deep'){paused=true;break;}}
+  const remaining=C.expandVisible([dialog],Number.MAX_SAFE_INTEGER,'deep',true);
+  unchanged=signature===lastSignature?unchanged+1:0;lastSignature=signature;
+  if(unchanged>=3){blocked=remaining>0;settled=!blocked;break;}
+  const clicks=C.expandVisible([dialog],1,'deep');
   await delay(clicks?500:160);
   const movement=await F.advanceDialog(dialog,window,delay);
-  unchanged=(count>lastCount||clicks>0||movement.moved)?0:unchanged+1;lastCount=count;
-  if(unchanged>=2)break;
+  if(movement.moved)unchanged=0;
  }
+ if(!paused&&!settled)blocked=true;
  closeOwnedDialog(dialog);for(let i=0;i<8&&dialog?.isConnected;i++)await delay(120);
- return temp?.comments||[];
+ if(dialog?.isConnected)blocked=true;
+ return {comments:temp?.comments||[],paused,blocked};
 }
 async function handleObstruction(job,phase){
  const deep=job.stage==='deep',expected=deep?job.queue?.[job.index]:null,actual=deep?getPostId():null;
@@ -135,7 +142,7 @@ async function deep(job){
  try{
   job=await send('deepExpanding',{id:expected});
   if(!job||job.deepPhase!=='EXPANDING')return;
-  let combined=null,expanded=0,scrolled=0,unchanged=0,supplemental=[];
+  let combined=null,expanded=0,scrolled=0,unchanged=0,supplemental=[],settled=false;
   const MAX_DETAIL_CYCLES=32;
   for(let i=0;i<MAX_DETAIL_CYCLES;i++){
    const refreshed=await send('status');if(!refreshed||refreshed.paused||refreshed.stage!=='deep'||refreshed.queue[refreshed.index]!==expected||refreshed.deepPhase==='NAVIGATING')return;
@@ -152,7 +159,12 @@ async function deep(job){
    const ownedThread=F.commentThreadDialog(document,window,dialogsBefore);
    if(ownedThread){
     const extra=await harvestOwnedCommentDialog(ownedThread,job,expected);
-    supplemental=supplemental.concat(extra);
+    supplemental=supplemental.concat(extra.comments);
+    if(extra.paused)return;
+    if(extra.blocked){
+     const partial=C.mergePosts(combined,{group:job.group,post_id:expected,permalink:C.canonicalUrl(job.group,expected),post_text:'',comments:supplemental,collector:C.collector},job.group);
+     await send('deepPassEnd',{id:expected,post:partial,scrolled,expanded,coverage:{settled:true,known_incomplete:true,reason:'owned_reply_dialog_unresolved',total_completeness:'unknown'}});return;
+    }
    }
    if(await handleObstruction(job,'подробное извлечение после раскрытия'))return;
    const activeRoot=F.detailDialog(document,window);
@@ -161,11 +173,12 @@ async function deep(job){
    for(const p of cards)combined=C.mergePosts(combined,p,job.group);
    if(supplemental.length)combined=C.mergePosts(combined,{group:job.group,post_id:expected,permalink:C.canonicalUrl(job.group,expected),post_text:'',comments:supplemental,collector:C.collector},job.group);
    const newComments=(combined?.comments?.length||0)-beforeCount;
+   if(combined){const progress=await send('deepProgress',{id:expected,post:combined,cycle:i,scrolled,expanded});if(progress?.paused||progress?.ignored||progress?.stage&&progress.stage!=='deep')return;}
    const movement=activeRoot?await F.advanceDetail(document,window,delay):await F.advance(document,window,delay);
    if(movement.blocked){await send('obstructed',{stage:'deep',diagnostics:{...movement.blocked,phase:'подробное извлечение: прокрутка',current_url:location.href,target_found:Boolean(activeRoot)}});return;}
    if(movement.moved)scrolled++;
    unchanged=(newComments>0||newExpansions>0||movement.moved)?0:unchanged+1;
-   if(i>=3 && unchanged>=3)break;
+   if(i>=3 && unchanged>=3){settled=true;break;}
    if(i<MAX_DETAIL_CYCLES-1)await delay(850);
   }
   if(!combined||combined.post_id!==expected){
@@ -175,7 +188,13 @@ async function deep(job){
    await send('deepSnapshot',{post:combined,scrolled,expanded,fallback:'url_identity_existing_discovery'});
    return;
   }
-  await send('deepSnapshot',{post:combined,scrolled,expanded});
+  const finalModal=F.detailDialog(document,window);
+  const finalNodes=C.postNodes(document,null,{includeDialog:Boolean(finalModal)}).filter(n=>(!finalModal||finalModal.contains(n))&&C.extractCard(n,job.group,location.href)?.post_id===expected);
+  if(!finalNodes.length){const root=C.permalinkPostRoot(document,job.group,location.href);if(root&&C.extractCard(root,job.group,location.href)?.post_id===expected)finalNodes.push(root);}
+  const remaining=C.expandVisible(finalNodes,Number.MAX_SAFE_INTEGER,'deep',true);
+  const coverage={settled,remaining_controls:remaining,known_incomplete:remaining>0,total_completeness:'unknown'};
+  if(!settled||coverage.known_incomplete){await send('deepPassEnd',{id:expected,post:combined,scrolled,expanded,coverage});return;}
+  await send('deepSnapshot',{post:combined,scrolled,expanded,coverage});
  }catch(e){try{await send('deepError',{id:expected,error:String(e.message||e)});}catch{}}
 }
 async function tick(){if(busy)return;busy=true;try{

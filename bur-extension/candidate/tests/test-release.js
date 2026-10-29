@@ -18,8 +18,9 @@ assert.ok(bg.includes("JOB_KEY='burCollectorJob-v0520'"));
 assert.ok(bg.includes("files:['core.js','feed-scroll.js','checkpoint-seek.js','content.js']"));
 assert.ok(!bg.includes('checkpointBypassPending'));
 const deep=source=>source.slice(source.indexOf('async function deep(job){'),source.indexOf('async function tick(){'));
-assert.equal(sha(deep(content)),expected.deep_sha256,'Deep must be byte-equivalent');
-console.log('PASS manifest references, version alignment, storage compatibility; scroll/Deep identical; per-group mode UI intentionally added; relational export intentionally additive; download acknowledgment intentionally strengthened; core enhanced for post metadata to canonical baseline');
+assert.equal(sha(deep(read(baseline,'content.js'))),expected.deep_sha256,'original Deep baseline must stay immutable');
+for(const guard of ["await send('deepMismatch'","filter(p=>p.post_id===expected)","F.advanceDetail(document,window,delay)","await handleObstruction(job","await send('deepProgress'","await send('deepPassEnd'"])assert.ok(deep(content).includes(guard),guard);
+console.log('PASS manifest references, version alignment, storage compatibility; scroll identical; Deep target/obstruction/scroll guards retained with durable progress and bounded continuation; per-group mode UI intentionally added; relational export intentionally additive; download acknowledgment intentionally strengthened; core enhanced for post metadata to canonical baseline');
 
 assert.ok(read(root,'export.html').includes('src="archive-graph.js"'));assert.ok(fs.existsSync(path.join(root,'archive-graph.js')));
 
