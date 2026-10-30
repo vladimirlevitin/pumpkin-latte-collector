@@ -5,7 +5,19 @@ function state(j){if(!j)return 'Нет задания. Откройте лент
  const stage=({discover:'Разведка',deep:'Подробное извлечение',exporting:'Сохранение пакета',stalled:'Требуется вмешательство',done:'Завершено'})[j.stage]||j.stage;
  return `Группа: ${j.group}\nРежим: ${j.runMode==='update'?'Новые публикации':'История группы'}\nВерхняя граница: ${j.archiveHead||'ещё не установлена'}\nИсторический хвост: ${j.archiveTail||'ещё не установлен'}\nЭтап: ${stage}${j.paused?' · пауза':''}\nПакет: ${j.batchNumber||1} · завершено: ${j.completedBatches||0} · всего: ${j.sessionPosts||0}\n${j.checkpointPostId?`Граница: ${j.checkpointPostId}${j.checkpointPending?' · аварийный поиск':''}`:''}\nТекущий пакет: ${j.discovered} из ${j.options?.maxPosts||'?'} · шагов: ${j.steps}\nDeep: ${j.deepDone}/${j.batchDeepTotal??j.queue?.length??0} · ошибок: ${j.deepErrors||0}\n${j.note||''}`;
 }
-async function refresh(){try{$('status').textContent=state(await ask('status'));}catch(e){$('status').textContent='Ошибка: '+e.message;}}
+// 0.5.27: a page script cut off by an extension reload/reinstall keeps the feed still
+// while the job still says "Разведка". Ping the working tab and say so plainly.
+async function liveness(j){
+ if(!j||j.paused||!['discover','deep'].includes(j.stage))return '';
+ const tabId=j.stage==='deep'?(j.deepTabId??j.feedTabId??j.tabId):(j.feedTabId??j.tabId);
+ if(tabId==null)return '';
+ const want=chrome.runtime.getManifest().version;
+ try{const r=await chrome.tabs.sendMessage(tabId,{type:'burPing'});
+  if(r?.ready&&String(r.version||'').startsWith(want))return '';
+ }catch(_){}
+ return '\n\n⚠ Связь со вкладкой '+(j.stage==='deep'?'подробного сбора':'ленты')+' потеряна (расширение обновлялось или вкладка устарела). Перезагрузите эту вкладку (F5) и нажмите «Начать / продолжить». Задание сохранено.';
+}
+async function refresh(){try{const j=await ask('status');$('status').textContent=state(j)+await liveness(j);}catch(e){$('status').textContent='Ошибка: '+e.message;}}
 function groupOf(url){try{return decodeURIComponent(new URL(url).pathname.match(/^\/groups\/([^/]+)/)?.[1]||'')||null;}catch{return null;}}
 async function activeTab(){const t=(await chrome.tabs.query({active:true,currentWindow:true}))[0];if(!t?.id)throw Error('Откройте вкладку Facebook-группы');return t;}
 async function op(button,fn){button.disabled=true;try{await fn();await refresh();}catch(e){$('status').textContent='Ошибка: '+e.message;}finally{button.disabled=false;}}

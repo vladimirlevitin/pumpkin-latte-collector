@@ -1,11 +1,11 @@
-/* FB Bur core 0.5.26-alpha; offline-testable, no Facebook API bypass. */
+/* FB Bur core 0.5.27-alpha; offline-testable, no Facebook API bypass. */
 (function(root, factory) {
   const api = factory();
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.FBBurCore = api;
 })(typeof window !== 'undefined' ? window : globalThis, function() {
   'use strict';
-  const collector='fb-group-bur/0.5.26-alpha';
+  const collector='fb-group-bur/0.5.27-alpha';
   const clean = (s) => String(s || '').replace(/\u00a0/g,' ').replace(/\r\n/g,'\n').replace(/[ \t]+/g,' ').replace(/\n[ \t]*/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
   const cut = (s,n=40000) => clean(s).slice(0,n);
   const IDPAT=/(?:\/groups\/([^/?#]+)\/(?:posts|permalink)\/(\d+))|(?:[?&]story_fbid=(\d+))/;
@@ -244,7 +244,7 @@
     }
     return commentsNormalize(items);
   }
-  // 0.5.26: a permalink page shows the selected post in a dialog OVER the group feed.
+  // 0.5.25: a permalink page shows the selected post in a dialog OVER the group feed.
   // Background feed posts must never be taken as the selected post.
   function openPostDialog(doc){
     const view=doc.defaultView;
@@ -581,7 +581,7 @@
     // On a permalink page the post itself may not contain its own anchor.
     // Use the verified page URL only when the card also has an identified post-body element.
     if(!link && bodyNode && loc){
-      // 0.5.26: borrow the page URL id only for the post inside the open post dialog
+      // 0.5.25: borrow the page URL id only for the post inside the open post dialog
       // (or when no such dialog exists), never for a background feed card.
       const dialog=node.ownerDocument?openPostDialog(node.ownerDocument):null;
       const id=(!dialog||dialog.contains(node))?idFromPermalink(loc,group):null;
