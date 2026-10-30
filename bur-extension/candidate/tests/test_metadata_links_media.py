@@ -53,10 +53,16 @@ with sync_playwright() as p:
  changed=page.evaluate('([old,fresh])=>FBBurCore.mergePosts(old,fresh,fresh.group)',[row,anonymous])
  assert changed['author_is_anonymous'] and changed['author_url'] is None
  page.locator('#post > h3').evaluate('(el)=>el.remove()')
- # Missing timezone/year remains explicit uncertainty, never a fabricated instant.
- for label,precision,day in [('28 октября 2026 в 10:30','day','2026-10-28'),('28 октября','label',None),('2 дн.','label',None)]:
+ # Missing timezone/year/exact moment never becomes a fabricated instant (published_at stays null).
+ # 0.5.26: a date without year infers the year (flagged); a relative label becomes an
+ # approximate date estimated from the moment of capture (flagged approx_*).
+ expected_rel=page.evaluate('''()=>{const d=new Date(Date.now()-2.5*86400e3);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}''')
+ for label,precision,day,extra in [('28 октября 2026 в 10:30','day','2026-10-28',None),('28 октября','day',None,'date_year_inferred'),('2 дн.','approx_day',expected_rel,'published_estimated_at')]:
   page.evaluate('''label=>{const a=document.createElement('a');a.href='/groups/another-group/posts/123456789/';a.title=label;a.id='date';document.querySelector('#post').prepend(a)}''',label)
-  r=card();assert r['published_at'] is None and r['date_precision']==precision and r['published_date']==day,r
+  r=card();assert r['published_at'] is None and r['date_precision']==precision,r
+  if day: assert r['published_date']==day,r
+  else: assert r['published_date'] and r['published_date'].endswith('-10-28'),r
+  if extra: assert r.get(extra),r
   page.locator('#date').evaluate('(el)=>el.remove()')
  # A body link retains its label in fallback extraction; link-only comments survive.
  page.locator('#comment > [dir]').evaluate("el=>el.innerHTML='<a href=\"https://example.org/only\">https://example.org/only</a>'")

@@ -1,4 +1,4 @@
-/* FB Bur 0.5.25-alpha: feed-order observations + structured comment threads + live page identity. */
+/* FB Bur 0.5.26-alpha: feed-order observations + structured comment threads + live page identity. */
 (() => {
 'use strict';
 if(window.__burCollector0524)return;window.__burCollector0524=true;
@@ -154,6 +154,10 @@ async function deep(job){
  try{
   job=await send('deepExpanding',{id:expected});
   if(!job||job.deepPhase!=='EXPANDING')return;
+  // Exact publication time: Facebook shows it only in the timestamp's hover tooltip.
+  let exactDate=null;
+  try{const r=await C.hoverExactDate(C.permalinkPostRoot(document,job.group,location.href)||F.detailDialog(document,window),{wait:delay});if(r?.status==='ok')exactDate=r;}catch(_){}
+  const withDate=p=>p&&exactDate?{...p,...C.betterDate(p,exactDate)}:p;
   let combined=null,expanded=0,scrolled=0,unchanged=0,supplemental=[],settled=false,commentSort={status:'not_exposed',verified:false};
   const MAX_DETAIL_CYCLES=32;
   for(let i=0;i<MAX_DETAIL_CYCLES;i++){
@@ -168,7 +172,7 @@ async function deep(job){
     if(commentSort.known_incomplete){
      for(const row of currentCards(job.group,{includeDialog:Boolean(modalRoot),modalRoot}).filter(p=>p.post_id===expected))combined=C.mergePosts(combined,row,job.group);
      combined=combined||{group:job.group,post_id:expected,permalink:C.canonicalUrl(job.group,expected),post_text:'',comments:[],collector:C.collector};
-     await send('deepPassEnd',{id:expected,post:combined,scrolled,expanded,coverage:{settled:true,known_incomplete:true,comment_sort:commentSort,total_completeness:'unknown'}});return;
+     await send('deepPassEnd',{id:expected,post:withDate(combined),scrolled,expanded,coverage:{settled:true,known_incomplete:true,comment_sort:commentSort,total_completeness:'unknown'}});return;
     }
    }
    const dialogsBefore=new Set(F.visibleDialogs(document,window).map(x=>x.el));
@@ -184,7 +188,7 @@ async function deep(job){
     if(extra.paused)return;
     if(extra.blocked){
      const partial=C.mergePosts(combined,{group:job.group,post_id:expected,permalink:C.canonicalUrl(job.group,expected),post_text:'',comments:supplemental,collector:C.collector},job.group);
-     await send('deepPassEnd',{id:expected,post:partial,scrolled,expanded,coverage:{settled:true,known_incomplete:true,reason:'owned_reply_dialog_unresolved',total_completeness:'unknown'}});return;
+     await send('deepPassEnd',{id:expected,post:withDate(partial),scrolled,expanded,coverage:{settled:true,known_incomplete:true,reason:'owned_reply_dialog_unresolved',total_completeness:'unknown'}});return;
     }
    }
    if(await handleObstruction(job,'подробное извлечение после раскрытия'))return;
@@ -194,7 +198,7 @@ async function deep(job){
    for(const p of cards)combined=C.mergePosts(combined,p,job.group);
    if(supplemental.length)combined=C.mergePosts(combined,{group:job.group,post_id:expected,permalink:C.canonicalUrl(job.group,expected),post_text:'',comments:supplemental,collector:C.collector},job.group);
    const newComments=(combined?.comments?.length||0)-beforeCount;
-   if(combined){const progress=await send('deepProgress',{id:expected,post:combined,cycle:i,scrolled,expanded});if(progress?.paused||progress?.ignored||progress?.stage&&progress.stage!=='deep')return;}
+   if(combined){const progress=await send('deepProgress',{id:expected,post:withDate(combined),cycle:i,scrolled,expanded});if(progress?.paused||progress?.ignored||progress?.stage&&progress.stage!=='deep')return;}
    const movement=activeRoot?await F.advanceDetail(document,window,delay):await F.advance(document,window,delay);
    if(movement.blocked){await send('obstructed',{stage:'deep',diagnostics:{...movement.blocked,phase:'подробное извлечение: прокрутка',current_url:location.href,target_found:Boolean(activeRoot)}});return;}
    if(movement.moved)scrolled++;
@@ -216,7 +220,7 @@ async function deep(job){
     candidate_count:C.postNodes(document,null,{includeDialog:Boolean(F.detailDialog(document,window))}).length,
     observed_cycles:MAX_DETAIL_CYCLES,scrolled,expanded
    };
-   await send('deepSnapshot',{post:combined,scrolled,expanded,fallback:'url_identity_existing_discovery',coverage:{diagnostic}});
+   await send('deepSnapshot',{post:withDate(combined),scrolled,expanded,fallback:'url_identity_existing_discovery',coverage:{diagnostic}});
    return;
   }
   const finalModal=F.detailDialog(document,window);
@@ -224,8 +228,8 @@ async function deep(job){
   if(!finalNodes.length){const root=C.permalinkPostRoot(document,job.group,location.href);if(root&&C.extractCard(root,job.group,location.href)?.post_id===expected)finalNodes.push(root);}
   const remaining=C.expandVisible(finalNodes,Number.MAX_SAFE_INTEGER,'deep',true);
   const coverage={settled,remaining_controls:remaining,known_incomplete:remaining>0,comment_sort:commentSort,total_completeness:'unknown'};
-  if(!settled||coverage.known_incomplete){await send('deepPassEnd',{id:expected,post:combined,scrolled,expanded,coverage});return;}
-  await send('deepSnapshot',{post:combined,scrolled,expanded,coverage});
+  if(!settled||coverage.known_incomplete){await send('deepPassEnd',{id:expected,post:withDate(combined),scrolled,expanded,coverage});return;}
+  await send('deepSnapshot',{post:withDate(combined),scrolled,expanded,coverage});
  }catch(e){try{await send('deepError',{id:expected,error:String(e.message||e)});}catch{}}
 }
 async function tick(){if(busy)return;busy=true;try{
@@ -235,7 +239,7 @@ async function tick(){if(busy)return;busy=true;try{
  else if(j.tabRole==='deep'&&j.stage==='deep')await deep(j);
  }catch(e){console.warn('FB Бур (задание сохранено):',String(e.message||e).slice(0,200));}finally{busy=false;}}
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='burPing'){reply({ready:true,version:'0.5.25-alpha',location:location.pathname,href:location.href,pageInstance:PAGE_INSTANCE,scrollY:Number(window.scrollY)||0,obstruction:F.obstruction(document,window),detailPost:Boolean(F.detailDialog(document,window))});return;}
+ if(msg?.type==='burPing'){reply({ready:true,version:'0.5.26-alpha',location:location.pathname,href:location.href,pageInstance:PAGE_INSTANCE,scrollY:Number(window.scrollY)||0,obstruction:F.obstruction(document,window),detailPost:Boolean(F.detailDialog(document,window))});return;}
  if(msg?.type==='burCheckpointGet'){const group=groupFromURL();if(!group||msg.group!==group){reply({post_id:null});return;}reply({post_id:localStorage.getItem('fb-bur-checkpoint-v3:'+group)||null});return;}
  if(msg?.type==='burCheckpointSet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ok:false});return;}const key='fb-bur-checkpoint-v3:'+group;if(msg.post_id)localStorage.setItem(key,String(msg.post_id));else localStorage.removeItem(key);reply({ok:true});return;}
  if(msg?.type==='burHistoryGet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ids:[]});return;}try{const raw=JSON.parse(localStorage.getItem('fb-bur-history-v1:'+group)||'[]');reply({ids:Array.isArray(raw)?raw.filter(x=>/^\d{8,30}$/.test(String(x))).slice(-50000):[]});}catch{reply({ids:[]});}return;}

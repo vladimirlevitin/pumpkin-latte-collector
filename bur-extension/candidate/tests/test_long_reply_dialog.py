@@ -58,7 +58,7 @@ with sync_playwright() as p:
  assert not page.evaluate('window.obstructions.length'), page.evaluate('window.obstructions')
  assert not page.evaluate('window.errors.length'), page.evaluate('window.errors')
  assert page.evaluate('window.snapshots.length')==1, page.evaluate('({s:window.snapshots,o:window.obstructions,e:window.errors})')
- assert page.evaluate('window.snapshots[0].post.collector')=='fb-group-bur/0.5.25-alpha'
+ assert page.evaluate('window.snapshots[0].post.collector')=='fb-group-bur/0.5.26-alpha'
  comments=page.evaluate('window.snapshots[0].post.comments')
  by={c['id']:c for c in comments}
  assert any(m.get('source')=='owned_reply_dialog' and len(m['post']['comments'])>=28 for m in page.evaluate('window.progress')), 'dialog snapshots must be saved before final completion'

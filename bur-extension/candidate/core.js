@@ -1,11 +1,11 @@
-/* FB Bur core 0.5.25-alpha; offline-testable, no Facebook API bypass. */
+/* FB Bur core 0.5.26-alpha; offline-testable, no Facebook API bypass. */
 (function(root, factory) {
   const api = factory();
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.FBBurCore = api;
 })(typeof window !== 'undefined' ? window : globalThis, function() {
   'use strict';
-  const collector='fb-group-bur/0.5.25-alpha';
+  const collector='fb-group-bur/0.5.26-alpha';
   const clean = (s) => String(s || '').replace(/\u00a0/g,' ').replace(/\r\n/g,'\n').replace(/[ \t]+/g,' ').replace(/\n[ \t]*/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
   const cut = (s,n=40000) => clean(s).slice(0,n);
   const IDPAT=/(?:\/groups\/([^/?#]+)\/(?:posts|permalink)\/(\d+))|(?:[?&]story_fbid=(\d+))/;
@@ -42,6 +42,7 @@
         links:normalizeLinks(src.links),media:uniqueMedia(src.media),
         published_at:src.published_at||null,published_label:src.published_label||null,
         published_date:src.published_date||null,date_precision:src.date_precision||'unknown',date_source:src.date_source||null,
+        ...dateFields(src),date_precision:src.date_precision||'unknown',
         text_is_partial:src.text_is_partial===true||truncated(text),
         extraction:src.extraction||'visible_dom_unverified'};
       const prev=byId.get(id);
@@ -56,9 +57,7 @@
         permalink:best.permalink||other.permalink,
         parent_id:best.parent_id||other.parent_id,
         links:normalizeLinks([...other.links,...best.links]),media:uniqueMedia([...other.media,...best.media]),
-        published_at:best.published_at||other.published_at,published_label:best.published_label||other.published_label,
-        published_date:best.published_date||other.published_date,
-        date_precision:best.date_precision!=='unknown'?best.date_precision:other.date_precision,date_source:best.date_source||other.date_source});
+        ...betterDate(prev,incoming)});
     }
     return [...byId.values()];
   }
@@ -113,8 +112,7 @@
       author:incoming.author||old.author||null,
       author_url:incoming.author?(incoming.author_url||null):(old.author_url||null),
       author_is_anonymous:incoming.author?incoming.author_is_anonymous===true:old.author_is_anonymous===true,
-      published_at:incoming.published_at||old.published_at||null,
-      published_label:incoming.published_label||old.published_label||null,
+      ...betterDate(old,incoming),
       media:uniqueMedia([...(old.media||[]),...(incoming.media||[])]),
       first_seen:old.first_seen||incoming.first_seen,snapshot_at:incoming.snapshot_at,
       id_quality:old.post_id||incoming.post_id?'permalink':'text_fingerprint_unverified',
@@ -246,7 +244,7 @@
     }
     return commentsNormalize(items);
   }
-  // 0.5.25: a permalink page shows the selected post in a dialog OVER the group feed.
+  // 0.5.26: a permalink page shows the selected post in a dialog OVER the group feed.
   // Background feed posts must never be taken as the selected post.
   function openPostDialog(doc){
     const view=doc.defaultView;
@@ -419,8 +417,100 @@
     if(m){day=+m[1];month=months.indexOf(m[2])+1||english.indexOf(m[2])+1;year=+m[3];}
     else if((m=s.toLowerCase().match(/^([a-z]+)\s+(\d{1,2}),?\s+(\d{4})(?:\s|$)/))){month=english.indexOf(m[1])+1;day=+m[2];year=+m[3];}
     else if((m=s.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|T)/))){year=+m[1];month=+m[2];day=+m[3];}
+    if(!(year&&month&&day)){const fb=parseFacebookDate(s);if(fb)return fb;}
     if(year&&month&&day){const d=new Date(Date.UTC(year,month-1,day));if(d.getUTCFullYear()===year&&d.getUTCMonth()===month-1&&d.getUTCDate()===day)return {published_at:null,published_date:[year,String(month).padStart(2,'0'),String(day).padStart(2,'0')].join('-'),date_precision:'day'};}
     return null;
+  }
+
+  // ---- 0.5.26: dates -------------------------------------------------------
+  // Facebook shows "3 дн." on the card and the exact moment only in a hover tooltip
+  // ("Вторник, 27 октябрь 2026 г. в 13:46"), rendered in the browser's local time.
+  const MONTH_STEMS=[['янв','jan'],['фев','feb'],['мар','mar'],['апр','apr'],['ма[йяе]','may'],['июн','jun'],['июл','jul'],['авг','aug'],['сен','sep'],['окт','oct'],['ноя','nov'],['дек','dec']];
+  function monthIndex(word){const w=String(word||'').toLowerCase();for(let i=0;i<12;i++){const [ru,en]=MONTH_STEMS[i];if(new RegExp('^(?:'+ru+'|'+en+')','u').test(w))return i;}return -1;}
+  function localIso(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+  function tzName(){try{return Intl.DateTimeFormat().resolvedOptions().timeZone||null;}catch(_){return null;}}
+  // Absolute Facebook date text, with or without weekday / year / time.
+  function parseFacebookDate(raw,nowMs){
+    const s=clean(raw).replace(/^[^\d,]*?(?:,\s*)/u,'').trim();if(!s)return null;
+    const now=new Date(Number.isFinite(nowMs)?nowMs:Date.now());
+    let day,month,year=null,hh=null,mi=null,m;
+    if((m=s.match(/^(\d{1,2})\s+([A-Za-zА-Яа-яЁё]+)\.?(?:\s+(\d{4})\s*(?:г\.?)?)?(?:\s*(?:в|at)\s*(\d{1,2}):(\d{2}))?\s*$/u))){
+      day=+m[1];month=monthIndex(m[2]);if(m[3])year=+m[3];if(m[4]){hh=+m[4];mi=+m[5];}
+    }else if((m=s.match(/^([A-Za-z]+)\s+(\d{1,2})(?:,?\s+(\d{4}))?(?:\s+at\s+(\d{1,2}):(\d{2})\s*([AP]M)?)?\s*$/i))){
+      month=monthIndex(m[1]);day=+m[2];if(m[3])year=+m[3];
+      if(m[4]){hh=+m[4]%12+(m[6]&&/pm/i.test(m[6])?12:0);if(m[6]&&/am/i.test(m[6])&&+m[4]===12)hh=0;if(!m[6])hh=+m[4];mi=+m[5];}
+    }else return null;
+    if(month<0||!(day>=1&&day<=31))return null;
+    const inferredYear=year==null;
+    if(inferredYear){year=now.getFullYear();if(new Date(year,month,day)>now)year--;}
+    const d=hh==null?new Date(year,month,day):new Date(year,month,day,hh,mi);
+    if(d.getMonth()!==month||d.getDate()!==day)return null;
+    return {published_at:hh==null?null:d.toISOString(),published_date:localIso(d),
+      date_precision:hh==null?'day':'minute',date_year_inferred:inferredYear||undefined,date_timezone:tzName()};
+  }
+  // "3 дн." / "16 ч." / "вчера" + the moment it was seen -> approximate date.
+  function estimateRelativeDate(label,seenMs){
+    const s=clean(label).toLowerCase();if(!s)return null;
+    const seen=new Date(Number.isFinite(seenMs)?seenMs:Date.now());
+    let m,ms=null,precision;
+    if(/^(?:только что|just now|now)$/.test(s)){ms=0;precision='approx_minute';}
+    else if((m=s.match(/^(\d+)\s*(?:мин|m\b|min)/u))){ms=+m[1]*60e3;precision='approx_minute';}
+    // Facebook rounds down ("3 дн." = 3..4 days ago), so take the middle of the interval.
+    else if((m=s.match(/^(\d+)\s*(?:ч|h\b|hr|hour)/u))){ms=(+m[1]+.5)*3600e3;precision='approx_hour';}
+    else if((m=s.match(/^(\d+)\s*(?:дн|д\.|d\b|day)/u))){ms=(+m[1]+.5)*86400e3;precision='approx_day';}
+    else if((m=s.match(/^(\d+)\s*(?:нед|w\b|wk|week)/u))){ms=(+m[1]+.5)*7*86400e3;precision='approx_week';}
+    else if((m=s.match(/^(\d+)\s*(?:г\.|год|лет|y\b|yr|year)/u))){ms=(+m[1]+.5)*365*86400e3;precision='approx_year';}
+    else if((m=s.match(/^(вчера|yesterday|сегодня|today)(?:\s*(?:в|at)\s*(\d{1,2}):(\d{2}))?/u))){
+      const d=new Date(seen.getFullYear(),seen.getMonth(),seen.getDate()-(/^(?:вчера|yesterday)/.test(m[1])?1:0),m[2]?+m[2]:12,m[3]?+m[3]:0);
+      return m[2]?{published_at:d.toISOString(),published_date:localIso(d),date_precision:'minute',date_timezone:tzName()}
+                 :{published_date:localIso(d),published_estimated_at:d.toISOString(),date_precision:'day',date_timezone:tzName()};
+    }
+    if(ms==null)return null;
+    const d=new Date(seen.getTime()-ms);
+    return {published_date:localIso(d),published_estimated_at:d.toISOString(),date_precision:precision,date_timezone:tzName()};
+  }
+  const DATE_RANK={timestamp:6,minute:6,day:5,approx_minute:4,approx_hour:4,approx_day:3,approx_week:2,approx_year:1,label:0.5,unknown:0};
+  const DATE_KEYS=['published_at','published_date','published_label','published_label_full','published_estimated_at','date_precision','date_source','date_timezone','date_year_inferred'];
+  const NO_DATE={published_at:null,published_date:null,published_label:null,published_label_full:undefined,published_estimated_at:undefined,date_precision:'unknown',date_source:null,date_timezone:undefined,date_year_inferred:undefined};
+  function dateFields(o){const r={};for(const k of DATE_KEYS)if(o&&o[k]!==undefined&&o[k]!==null)r[k]=o[k];return r;}
+  // Keep the most precise date evidence; on a tie keep the earlier observation.
+  function betterDate(a,b){
+    const ra=DATE_RANK[a?.date_precision||'unknown']??0,rb=DATE_RANK[b?.date_precision||'unknown']??0;
+    const win=rb>ra?b:a,lose=win===a?b:a;
+    return {...NO_DATE,...dateFields(win),published_label:win?.published_label||lose?.published_label||null};
+  }
+  // The post's own timestamp link (not a comment's): outside the body, links to the post.
+  function postTimestampLink(root){
+    if(!root)return null;
+    const body=root.querySelector('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="story_message"]');
+    for(const a of root.querySelectorAll('a[href]')){
+      const href=a.getAttribute('href')||'';
+      if(/comment_id=/.test(href)||!/multi_permalinks=|\/posts\/\d|\/permalink\/\d/.test(href))continue;
+      if(body?.contains(a))continue;
+      const t=clean(a.innerText||a.getAttribute('aria-label')||'');if(!t||t.length>40)continue;
+      return a;
+    }
+    return null;
+  }
+  // Hover the timestamp, read the tooltip, un-hover. One tooltip at a time, so it is ours.
+  async function hoverExactDate(root,opts={}){
+    const wait=opts.wait||(ms=>new Promise(r=>setTimeout(r,ms)));
+    const a=postTimestampLink(root);if(!a)return {status:'no_timestamp_link'};
+    const doc=a.ownerDocument,view=doc.defaultView;
+    const tips=()=>[...doc.querySelectorAll('[role="tooltip"]')].map(t=>clean(t.innerText||t.textContent)).filter(Boolean);
+    const fire=(types)=>{const r=a.getBoundingClientRect();const o={bubbles:true,cancelable:true,view,clientX:r.x+r.width/2,clientY:r.y+r.height/2};
+      for(const t of types){const Ctor=t.startsWith('pointer')&&view.PointerEvent?view.PointerEvent:view.MouseEvent;a.dispatchEvent(new Ctor(t,o));}};
+    const leave=()=>fire(['pointerout','pointerleave','mouseout','mouseleave']);
+    leave();await wait(250);
+    const before=new Set(tips());
+    fire(['pointerover','pointerenter','mouseover','mouseenter','pointermove','mousemove']);
+    let text=null;
+    for(let i=0;i<12&&!text;i++){await wait(200);text=tips().find(t=>!before.has(t)&&parseFacebookDate(t))||null;}
+    leave();
+    if(!text)return {status:'no_tooltip',label:clean(a.innerText||'')};
+    const parsed=parseFacebookDate(text);
+    if(!parsed)return {status:'unparsed',tooltip:text};
+    return {status:'ok',...parsed,published_label:clean(a.innerText||'')||null,published_label_full:text,date_source:'hover_tooltip'};
   }
   function extractDate(owner){
     const empty={published_at:null,published_date:null,published_label:null,date_precision:'unknown',date_source:null};
@@ -439,7 +529,7 @@
       for(const [source,raw] of [['datetime',datetime],['aria-label',el.getAttribute('aria-label')],['title',el.getAttribute('title')],['visible',el.innerText||el.textContent]]){
         const parsed=parseDateEvidence(raw);
         if(parsed){const evidence={...empty,...parsed,published_label:clean(raw),date_source:source};if(parsed.published_at)return evidence;if(!fallback)fallback=evidence;}
-        else if(!fallback&&raw&&/^(?:\d+\s*(?:мин|ч|дн|нед|[mhdy]|days?|hours?|weeks?)\.?|сегодня|вчера|today|yesterday|\d{1,2}\s+(?:январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|ноябр|декабр))/iu.test(clean(raw))){fallback={...empty,published_label:clean(raw),date_precision:'label',date_source:source};}
+        else if(!fallback&&raw&&/^(?:\d+\s*(?:мин|ч|дн|нед|[mhdy]|days?|hours?|weeks?)\.?|сегодня|вчера|today|yesterday|\d{1,2}\s+(?:январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|ноябр|декабр))/iu.test(clean(raw))){fallback={...empty,published_label:clean(raw),date_precision:'label',date_source:source,...(estimateRelativeDate(raw)||{})};}
       }
     }
     return fallback||empty;
@@ -491,7 +581,7 @@
     // On a permalink page the post itself may not contain its own anchor.
     // Use the verified page URL only when the card also has an identified post-body element.
     if(!link && bodyNode && loc){
-      // 0.5.25: borrow the page URL id only for the post inside the open post dialog
+      // 0.5.26: borrow the page URL id only for the post inside the open post dialog
       // (or when no such dialog exists), never for a background feed card.
       const dialog=node.ownerDocument?openPostDialog(node.ownerDocument):null;
       const id=(!dialog||dialog.contains(node))?idFromPermalink(loc,group):null;
@@ -602,5 +692,5 @@
     return {...proof,status:'selected_new_posts',previous_label:found.label};
   }
   return {inspectFeedOrder,ensureNewPosts,ensureAllComments,uniqueMedia,collector,clean,hash,idFromPermalink,canonicalUrl,textQuality,truncated,
-    parseDateEvidence,normalizePost,mergePosts,postNodes,extractCard,extractVisibleComments,expandVisible,permalinkPostRoot};
+    parseDateEvidence,parseFacebookDate,estimateRelativeDate,betterDate,postTimestampLink,hoverExactDate,normalizePost,mergePosts,postNodes,extractCard,extractVisibleComments,expandVisible,permalinkPostRoot};
 });
