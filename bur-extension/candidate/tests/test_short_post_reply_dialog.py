@@ -54,7 +54,7 @@ with sync_playwright() as p:
  assert not page.evaluate('window.obstructions.length'), page.evaluate('window.obstructions')
  assert not page.evaluate('window.errors.length'), page.evaluate('window.errors')
  assert page.evaluate('window.snapshots.length')==1, page.evaluate('({s:window.snapshots,o:window.obstructions,e:window.errors})')
- assert page.evaluate('window.snapshots[0].post.collector')=='fb-group-bur/0.5.24-alpha'
+ assert page.evaluate('window.snapshots[0].post.collector')=='fb-group-bur/0.5.25-alpha'
  comments=page.evaluate('window.snapshots[0].post.comments')
  by={c['id']:c for c in comments}
  assert '556' in by and '557' in by, comments

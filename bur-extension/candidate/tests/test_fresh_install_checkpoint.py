@@ -67,7 +67,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp,sync_playwri
  print('setup: opening actual toolbar popup',flush=True)
  pe=open_popup()
  manifest=pe('chrome.runtime.getManifest()')
- assert manifest['version_name']=='0.5.24-alpha'
+ assert manifest['version_name']=='0.5.25-alpha'
  assert popup_until(pe,"document.querySelector('#status').innerText.includes('Нет задания')")
  tabid=control.evaluate("async()=> (await chrome.tabs.query({})).find(x=>x.url==='https://www.facebook.com/groups/backpackIL/').id")
  ping=control.evaluate('(id)=>chrome.tabs.sendMessage(id,{type:"burPing"})',tabid)

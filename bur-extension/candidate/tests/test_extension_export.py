@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory() as tmp, sync_playwright() as p:
    assert comment['author_key'] and comment['post_key']==actual['key']
  assert len(data['authors'])==53
  assert all(a['identity_quality']=='display_name_only' for a in data['authors'])
- assert data['collector_version']=='0.5.24-alpha'
+ assert data['collector_version']=='0.5.25-alpha'
  assert data['job_summary']['session_id']=='saved-session'
  assert data['job_summary']['batch_number']==3
  assert data['job_summary']['id']=='saved-session-b0003'

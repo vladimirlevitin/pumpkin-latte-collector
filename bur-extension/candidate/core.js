@@ -1,11 +1,11 @@
-/* FB Bur core 0.5.24-alpha; offline-testable, no Facebook API bypass. */
+/* FB Bur core 0.5.25-alpha; offline-testable, no Facebook API bypass. */
 (function(root, factory) {
   const api = factory();
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.FBBurCore = api;
 })(typeof window !== 'undefined' ? window : globalThis, function() {
   'use strict';
-  const collector='fb-group-bur/0.5.24-alpha';
+  const collector='fb-group-bur/0.5.25-alpha';
   const clean = (s) => String(s || '').replace(/\u00a0/g,' ').replace(/\r\n/g,'\n').replace(/[ \t]+/g,' ').replace(/\n[ \t]*/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
   const cut = (s,n=40000) => clean(s).slice(0,n);
   const IDPAT=/(?:\/groups\/([^/?#]+)\/(?:posts|permalink)\/(\d+))|(?:[?&]story_fbid=(\d+))/;
@@ -124,7 +124,7 @@
   function detectPostLink(node,group) {
     for(const a of node.querySelectorAll('a[href]')) {
       const nearest=a.closest?.('[role="article"]');if(nearest&&nearest!==node)continue;
-      if(a.closest('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"]'))continue;
+      if(a.closest('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="story_message"]'))continue;
       const url=a.getAttribute('href');if(/[?&](?:reply_)?comment_id=/.test(url||''))continue;const id=idFromPermalink(url,group);
       if(id) return {id,url:canonicalUrl(group,id)};
     }
@@ -224,7 +224,7 @@
     for(const article of articles){
       if(!article.isConnected)continue;
       const bounds=article.getBoundingClientRect?.();if(bounds&&bounds.width<=0&&bounds.height<=0)continue;
-      if(article.querySelector('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"]'))continue;
+      if(article.querySelector('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="story_message"]'))continue;
       const author=commentAuthor(article),link=commentLink(article);
       const media=extractMedia(article,link?.url||null),links=extractLinks(article,article);
       const value=ownCommentText(article,author);if(!value&&!link&&!media.length&&!links.length)continue;
@@ -246,9 +246,22 @@
     }
     return commentsNormalize(items);
   }
+  // 0.5.25: a permalink page shows the selected post in a dialog OVER the group feed.
+  // Background feed posts must never be taken as the selected post.
+  function openPostDialog(doc){
+    const view=doc.defaultView;
+    const dialogs=[...doc.querySelectorAll('[role="dialog"],[aria-modal="true"]')].filter(d=>{
+      if(d.closest('[aria-hidden="true"]'))return false;
+      const r=d.getBoundingClientRect?.();if(!r||r.width<300||r.height<300)return false;
+      try{const st=view.getComputedStyle(d);if(st.display==='none'||st.visibility==='hidden')return false;}catch(_){}
+      return Boolean(d.querySelector('[role="article"]'));
+    });
+    return dialogs.length?dialogs[dialogs.length-1]:null;
+  }
   function permalinkPostRoot(doc,group,loc){
     const id=idFromPermalink(loc,group);if(!id)return null;
-    const bodies=[...doc.querySelectorAll('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"]')];
+    const dialog=openPostDialog(doc);
+    const bodies=[...(dialog||doc).querySelectorAll('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="story_message"]')];
     for(const body of bodies){
       const r=body.getBoundingClientRect?.();if(r&&r.width<=0&&r.height<=0)continue;
       const article=body.closest('[role="article"]');if(article)return article;
@@ -274,7 +287,7 @@
   // later in the deep phase, where a single permalink is already selected.
   function expandVisible(nodes,maxClicks=16,mode='post',dryRun=false) {
     let clicks=0;
-    const bodySelectors='[data-ad-comet-preview="message"], [data-ad-preview="message"], [data-testid="post_message"]';
+    const bodySelectors='[data-ad-comet-preview="message"], [data-ad-preview="message"], [data-testid="post_message"],[data-ad-rendering-role="story_message"]';
     const more=/^(?:Ещё|See more|עוד)$/iu;
     const replies=/^(?:Показать|Посмотреть) (?:\d+ )?ответ(?:а|ов)?$|^View (?:\d+ )?repl(?:y|ies)$|^(?:Показать|Посмотреть|Загрузить) (?:ещ[её] )?(?:\d+ )?комментари(?:ев|я|и)$|^(?:View|See|Load) (?:\d+ )?(?:more|previous) comments$/iu;
     const isVisible=el=>{const st=typeof getComputedStyle==='function'?getComputedStyle(el):null;const re=el.getBoundingClientRect?.();return (!st||(st.display!=='none'&&st.visibility!=='hidden'))&&(!re||(re.width>0&&re.height>0));};
@@ -341,7 +354,7 @@
   }
   function extractLinks(container,owner,ownerUrl=null){
     const result=[];
-    const body=container.matches?.('[data-ad-preview="message"],[data-ad-comet-preview="message"],[data-testid="post_message"]')?container:container.querySelector('[data-testid="comment_message"],[data-ad-preview="comment"],[data-testid="UFI2Comment/body"],.UFICommentBody');
+    const body=container.matches?.('[data-ad-preview="message"],[data-ad-comet-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="story_message"]')?container:container.querySelector('[data-testid="comment_message"],[data-ad-preview="comment"],[data-testid="UFI2Comment/body"],.UFICommentBody');
     for(const a of container.querySelectorAll('a[href]')){
       if(!ownElement(a,owner))continue;
       if(a.closest('h2,h3,h4,[data-ad-rendering-role="profile_name"]'))continue;
@@ -411,8 +424,8 @@
   }
   function extractDate(owner){
     const empty={published_at:null,published_date:null,published_label:null,date_precision:'unknown',date_source:null};
-    const body=owner.querySelector('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-testid="comment_message"],[data-ad-preview="comment"]');
-    const postBody=body?.matches('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"]');
+    const body=owner.querySelector('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="story_message"],[data-testid="comment_message"],[data-ad-preview="comment"]');
+    const postBody=body?.matches('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="story_message"]');
     let fallback=null;
     for(const el of owner.querySelectorAll('time[datetime],[data-utime],a[aria-label],a[title],abbr[title],span[title],span[aria-label],a[href]')){
       if(!ownElement(el,owner)||body?.contains(el))continue;
@@ -432,7 +445,7 @@
     return fallback||empty;
   }
   function extractPostMetadata(node,ownerUrl=null){
-    const body=node.querySelector('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"]');
+    const body=node.querySelector('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="story_message"]');
     const bodyTop=body?.getBoundingClientRect?.().top;
     let author=null,author_url=null;
     for(const a of node.querySelectorAll('a[href]')){
@@ -457,7 +470,7 @@
     return {author,author_url,author_is_anonymous,...extractDate(node),media:extractMedia(node,ownerUrl)};
   }
   function isPinned(node){
-    const body=node.querySelector('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"]');
+    const body=node.querySelector('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="story_message"]');
     for(const el of node.querySelectorAll('[aria-label],h2,h3')){
       if(!ownElement(el,node)||body?.contains(el))continue;
       if(body&&el.getBoundingClientRect().top>body.getBoundingClientRect().top+2)continue;
@@ -473,11 +486,17 @@
       if(primary.length===1)node=primary[0];
     }
     const raw=clean(observedNode.innerText||observedNode.textContent||'');
-    const bodyNode=node.querySelector('[data-ad-comet-preview="message"], [data-ad-preview="message"], [data-testid="post_message"]');
+    const bodyNode=node.querySelector('[data-ad-comet-preview="message"], [data-ad-preview="message"], [data-testid="post_message"],[data-ad-rendering-role="story_message"]');
     let link=detectPostLink(node,group);
     // On a permalink page the post itself may not contain its own anchor.
     // Use the verified page URL only when the card also has an identified post-body element.
-    if(!link && bodyNode && loc){const id=idFromPermalink(loc,group);if(id)link={id,url:canonicalUrl(group,id)};}
+    if(!link && bodyNode && loc){
+      // 0.5.25: borrow the page URL id only for the post inside the open post dialog
+      // (or when no such dialog exists), never for a background feed card.
+      const dialog=node.ownerDocument?openPostDialog(node.ownerDocument):null;
+      const id=(!dialog||dialog.contains(node))?idFromPermalink(loc,group):null;
+      if(id)link={id,url:canonicalUrl(group,id)};
+    }
     if(!link)return null; // never invent IDs for production posts
     let body=bodyNode?clean(bodyNode.innerText||bodyNode.textContent||''):'';
     if(!body){
