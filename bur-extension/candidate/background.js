@@ -1,8 +1,8 @@
-/* FB Bur 0.5.27-alpha. Continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
+/* FB Bur 0.5.28-alpha. Continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
 importScripts('core.js','archive-state.js');
 const C=globalThis.FBBurCore,A=globalThis.FBBurArchive;
 const DB='bur-collector-v05', DBVER=1,JOB_KEY='burCollectorJob-v0520',CHECKPOINT_KEY='burCollectorCheckpoints-v0520',HISTORY_KEY='burCollectorHistory-v0520',RECEIPT_KEY='burCollectorExportReceipts-v1',ARCHIVE_KEY='burCollectorArchives-v1',SAVED_JOB_KEY='burCollectorSavedJobs-v1',ALARM='bur-collector-watchdog';
-const VERSION='0.5.27-alpha',CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
+const VERSION='0.5.28-alpha',CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
 const historyCache=new Map(),confirmedCache=new Map();
 const DEFAULTS={maxPosts:50,maxSteps:15000};
 function groupOf(url){try{const u=new URL(url);if(!['www.facebook.com','web.facebook.com'].includes(u.hostname))return null;return decodeURIComponent(u.pathname.match(/^\/groups\/([^/]+)/)?.[1]||'')||null;}catch{return null;}}
