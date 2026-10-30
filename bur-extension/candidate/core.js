@@ -512,6 +512,21 @@
     if(!parsed)return {status:'unparsed',tooltip:text};
     return {status:'ok',...parsed,published_label:clean(a.innerText||'')||null,published_label_full:text,date_source:'hover_tooltip'};
   }
+  // Facebook's own comment total, from the post's comment button label
+  // ("Comment on Misha Roo's post, 33 comments"). Includes replies. null if unknown.
+  function facebookCommentCount(root){
+    if(!root)return null;
+    for(const el of root.querySelectorAll('[aria-label]')){
+      const s=el.getAttribute('aria-label')||'';
+      if(/реакц|reaction|нравится|like/i.test(s))continue;
+      const m=s.match(/(\d[\d\s .,]*)\s*(тыс|k\b|млн|m\b)?\.?\s*(?:comments?|комментари)/i);
+      if(!m)continue;
+      if(m[2])return null; // "1,2 тыс." - not an exact number
+      const n=parseInt(m[1].replace(/[^\d]/g,''),10);
+      if(Number.isFinite(n))return n;
+    }
+    return null;
+  }
   function extractDate(owner){
     const empty={published_at:null,published_date:null,published_label:null,date_precision:'unknown',date_source:null};
     const body=owner.querySelector('[data-ad-comet-preview="message"],[data-ad-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="story_message"],[data-testid="comment_message"],[data-ad-preview="comment"]');
@@ -692,5 +707,5 @@
     return {...proof,status:'selected_new_posts',previous_label:found.label};
   }
   return {inspectFeedOrder,ensureNewPosts,ensureAllComments,uniqueMedia,collector,clean,hash,idFromPermalink,canonicalUrl,textQuality,truncated,
-    parseDateEvidence,parseFacebookDate,estimateRelativeDate,betterDate,postTimestampLink,hoverExactDate,normalizePost,mergePosts,postNodes,extractCard,extractVisibleComments,expandVisible,permalinkPostRoot};
+    parseDateEvidence,parseFacebookDate,estimateRelativeDate,betterDate,postTimestampLink,hoverExactDate,facebookCommentCount,normalizePost,mergePosts,postNodes,extractCard,extractVisibleComments,expandVisible,permalinkPostRoot};
 });

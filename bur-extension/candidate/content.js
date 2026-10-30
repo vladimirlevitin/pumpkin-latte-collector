@@ -155,13 +155,16 @@ async function deep(job){
   job=await send('deepExpanding',{id:expected});
   if(!job||job.deepPhase!=='EXPANDING')return;
   // Exact publication time: Facebook shows it only in the timestamp's hover tooltip.
-  let exactDate=null;
-  try{const r=await C.hoverExactDate(C.permalinkPostRoot(document,job.group,location.href)||F.detailDialog(document,window),{wait:delay});if(r?.status==='ok')exactDate=r;}catch(_){}
+  let exactDate=null,hoverTries=0,fbCommentCount=null;
+  const tryHover=async()=>{if(exactDate||hoverTries>=4)return;hoverTries++;
+   try{const r=await C.hoverExactDate(C.permalinkPostRoot(document,job.group,location.href)||F.detailDialog(document,window),{wait:delay});if(r?.status==='ok')exactDate=r;}catch(_){}};
+  await tryHover();
   const withDate=p=>p&&exactDate?{...p,...C.betterDate(p,exactDate)}:p;
   let combined=null,expanded=0,scrolled=0,unchanged=0,supplemental=[],settled=false,commentSort={status:'not_exposed',verified:false};
   const MAX_DETAIL_CYCLES=32;
   for(let i=0;i<MAX_DETAIL_CYCLES;i++){
    const refreshed=await send('status');if(!refreshed||refreshed.paused||refreshed.stage!=='deep'||refreshed.queue[refreshed.index]!==expected||refreshed.deepPhase==='NAVIGATING')return;
+   if(i>0&&i%2===1)await tryHover(); // tooltip did not open first time (slow page): retry a few times
    const modalRoot=F.detailDialog(document,window);
    const nodes=C.postNodes(document,null,{includeDialog:Boolean(modalRoot)}).filter(n=>!modalRoot||modalRoot.contains(n));
    const fallback=C.permalinkPostRoot(document,job.group,location.href);
@@ -203,7 +206,11 @@ async function deep(job){
    if(movement.blocked){await send('obstructed',{stage:'deep',diagnostics:{...movement.blocked,phase:'подробное извлечение: прокрутка',current_url:location.href,target_found:Boolean(activeRoot)}});return;}
    if(movement.moved)scrolled++;
    unchanged=(newComments>0||newExpansions>0||movement.moved)?0:unchanged+1;
-   if(i>=3 && unchanged>=3){settled=true;break;}
+   // 0.5.28: Facebook's own total is a patience signal, never a stop: if fewer comments are
+   // collected than Facebook reports, wait longer for lazy loading before settling.
+   {const n=C.facebookCommentCount(activeRoot||sourceNodes[0]);if(n!=null)fbCommentCount=Math.max(fbCommentCount??0,n);}
+   const short=fbCommentCount!=null&&(combined?.comments?.length||0)<fbCommentCount;
+   if(i>=3 && unchanged>=(short?8:3)){settled=true;break;}
    if(i<MAX_DETAIL_CYCLES-1)await delay(850);
   }
   if(!combined||combined.post_id!==expected){
@@ -227,7 +234,12 @@ async function deep(job){
   const finalNodes=C.postNodes(document,null,{includeDialog:Boolean(finalModal)}).filter(n=>(!finalModal||finalModal.contains(n))&&C.extractCard(n,job.group,location.href)?.post_id===expected);
   if(!finalNodes.length){const root=C.permalinkPostRoot(document,job.group,location.href);if(root&&C.extractCard(root,job.group,location.href)?.post_id===expected)finalNodes.push(root);}
   const remaining=C.expandVisible(finalNodes,Number.MAX_SAFE_INTEGER,'deep',true);
-  const coverage={settled,remaining_controls:remaining,known_incomplete:remaining>0,comment_sort:commentSort,total_completeness:'unknown'};
+  const collectedCount=combined?.comments?.length||0;
+  const coverage={settled,remaining_controls:remaining,known_incomplete:remaining>0,comment_sort:commentSort,
+   facebook_comment_count:fbCommentCount,collected_comment_count:collectedCount,
+   comment_count_gap:fbCommentCount!=null?Math.max(0,fbCommentCount-collectedCount):null,
+   exact_date:exactDate?'hover_tooltip':'not_available',hover_tries:hoverTries,
+   total_completeness:fbCommentCount!=null&&collectedCount>=fbCommentCount?'matches_facebook_count':'unknown'};
   if(!settled||coverage.known_incomplete){await send('deepPassEnd',{id:expected,post:withDate(combined),scrolled,expanded,coverage});return;}
   await send('deepSnapshot',{post:withDate(combined),scrolled,expanded,coverage});
  }catch(e){try{await send('deepError',{id:expected,error:String(e.message||e)});}catch{}}
