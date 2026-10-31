@@ -1,8 +1,8 @@
-/* FB Bur 0.5.28-alpha. Continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
+/* FB Bur 0.5.29-alpha. Continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
 importScripts('core.js','archive-state.js');
 const C=globalThis.FBBurCore,A=globalThis.FBBurArchive;
 const DB='bur-collector-v05', DBVER=1,JOB_KEY='burCollectorJob-v0520',CHECKPOINT_KEY='burCollectorCheckpoints-v0520',HISTORY_KEY='burCollectorHistory-v0520',RECEIPT_KEY='burCollectorExportReceipts-v1',ARCHIVE_KEY='burCollectorArchives-v1',SAVED_JOB_KEY='burCollectorSavedJobs-v1',ALARM='bur-collector-watchdog';
-const VERSION='0.5.28-alpha',CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
+const VERSION='0.5.29-alpha',CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
 const historyCache=new Map(),confirmedCache=new Map();
 const DEFAULTS={maxPosts:50,maxSteps:15000};
 function groupOf(url){try{const u=new URL(url);if(!['www.facebook.com','web.facebook.com'].includes(u.hostname))return null;return decodeURIComponent(u.pathname.match(/^\/groups\/([^/]+)/)?.[1]||'')||null;}catch{return null;}}
@@ -14,7 +14,12 @@ async function clearGroup(group){const db=await openDB();try{await new Promise((
 async function putOne(p){const db=await openDB();try{await new Promise((resolve,reject)=>{const tx=db.transaction('posts','readwrite');tx.objectStore('posts').put(p);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});}finally{db.close();}}
 async function putMany(rows,group){let added=0,updated=0;const db=await openDB();try{await new Promise((resolve,reject)=>{const tx=db.transaction('posts','readwrite'),s=tx.objectStore('posts');tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);for(const raw of rows){const row=C.normalizePost(raw,group);if(!row.post_id||row.group!==group)continue;const request=s.get(row.key);request.onsuccess=()=>{const old=request.result;if(old)updated++;else added++;s.put(C.mergePosts(old,row,group));};}});}finally{db.close();}return {added,updated};}
 async function getJob(){return (await chrome.storage.local.get(JOB_KEY))[JOB_KEY]||null;}
+// 0.5.29: overnight runs lost comments after the display went to sleep: hidden pages
+// do not lazy-load Facebook comments. Keep the display awake while a job is running.
+function keepAwake(j){try{if(!chrome.power)return;const active=j&&!j.paused&&['discover','deep','exporting'].includes(j.stage);
+ if(active)chrome.power.requestKeepAwake('display');else chrome.power.releaseKeepAwake();}catch(_){}}
 async function setJob(j,extra={}){
+ keepAwake(j);
  j.updatedAt=now();const saved=(await chrome.storage.local.get(SAVED_JOB_KEY))[SAVED_JOB_KEY]||{};
  saved[j.group]||={};saved[j.group][j.runMode||'history']=j;
  await chrome.storage.local.set({[JOB_KEY]:j,[SAVED_JOB_KEY]:saved,...extra});return j;

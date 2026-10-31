@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "FB Бур — универсальный коллектор (alpha)",
   "short_name": "FB Бур",
-  "version": "0.5.28",
-  "version_name": "0.5.28-alpha",
+  "version": "0.5.29",
+  "version_name": "0.5.29-alpha",
   "description": "Непрерывный FB-коллектор: feed-вкладка сохраняет позицию, deep работает отдельно, JSON-пакеты продолжаются автоматически.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -12,7 +12,8 @@
     "scripting",
     "alarms",
     "unlimitedStorage",
-    "downloads"
+    "downloads",
+    "power"
   ],
   "host_permissions": [
     "https://www.facebook.com/*",

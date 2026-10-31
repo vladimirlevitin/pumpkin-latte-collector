@@ -1,4 +1,4 @@
-/* FB Bur 0.5.28-alpha: feed-order observations + structured comment threads + live page identity. */
+/* FB Bur 0.5.29-alpha: feed-order observations + structured comment threads + live page identity. */
 (() => {
 'use strict';
 if(window.__burCollector0524)return;window.__burCollector0524=true;
@@ -155,7 +155,7 @@ async function deep(job){
   job=await send('deepExpanding',{id:expected});
   if(!job||job.deepPhase!=='EXPANDING')return;
   // Exact publication time: Facebook shows it only in the timestamp's hover tooltip.
-  let exactDate=null,hoverTries=0,fbCommentCount=null;
+  let exactDate=null,hoverTries=0,fbCommentCount=null,hiddenCycles=0;
   const tryHover=async()=>{if(exactDate||hoverTries>=4)return;hoverTries++;
    try{const r=await C.hoverExactDate(C.permalinkPostRoot(document,job.group,location.href)||F.detailDialog(document,window),{wait:delay});if(r?.status==='ok')exactDate=r;}catch(_){}};
   await tryHover();
@@ -210,6 +210,9 @@ async function deep(job){
    // collected than Facebook reports, wait longer for lazy loading before settling.
    {const n=C.facebookCommentCount(activeRoot||sourceNodes[0]);if(n!=null)fbCommentCount=Math.max(fbCommentCount??0,n);}
    const short=fbCommentCount!=null&&(combined?.comments?.length||0)<fbCommentCount;
+   // 0.5.29: a hidden page (display asleep, window covered) does not lazy-load comments.
+   // Record it; while comments are short, a hidden cycle never counts toward settling.
+   if(document.hidden){hiddenCycles++;if(short)unchanged=0;}
    if(i>=3 && unchanged>=(short?8:3)){settled=true;break;}
    if(i<MAX_DETAIL_CYCLES-1)await delay(850);
   }
@@ -239,6 +242,7 @@ async function deep(job){
    facebook_comment_count:fbCommentCount,collected_comment_count:collectedCount,
    comment_count_gap:fbCommentCount!=null?Math.max(0,fbCommentCount-collectedCount):null,
    exact_date:exactDate?'hover_tooltip':'not_available',hover_tries:hoverTries,
+   page_hidden_cycles:hiddenCycles,
    total_completeness:fbCommentCount!=null&&collectedCount>=fbCommentCount?'matches_facebook_count':'unknown'};
   if(!settled||coverage.known_incomplete){await send('deepPassEnd',{id:expected,post:withDate(combined),scrolled,expanded,coverage});return;}
   await send('deepSnapshot',{post:withDate(combined),scrolled,expanded,coverage});
@@ -251,7 +255,7 @@ async function tick(){if(busy)return;busy=true;try{
  else if(j.tabRole==='deep'&&j.stage==='deep')await deep(j);
  }catch(e){console.warn('FB Бур (задание сохранено):',String(e.message||e).slice(0,200));}finally{busy=false;}}
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='burPing'){reply({ready:true,version:'0.5.28-alpha',location:location.pathname,href:location.href,pageInstance:PAGE_INSTANCE,scrollY:Number(window.scrollY)||0,obstruction:F.obstruction(document,window),detailPost:Boolean(F.detailDialog(document,window))});return;}
+ if(msg?.type==='burPing'){reply({ready:true,version:'0.5.29-alpha',location:location.pathname,href:location.href,pageInstance:PAGE_INSTANCE,scrollY:Number(window.scrollY)||0,obstruction:F.obstruction(document,window),detailPost:Boolean(F.detailDialog(document,window))});return;}
  if(msg?.type==='burCheckpointGet'){const group=groupFromURL();if(!group||msg.group!==group){reply({post_id:null});return;}reply({post_id:localStorage.getItem('fb-bur-checkpoint-v3:'+group)||null});return;}
  if(msg?.type==='burCheckpointSet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ok:false});return;}const key='fb-bur-checkpoint-v3:'+group;if(msg.post_id)localStorage.setItem(key,String(msg.post_id));else localStorage.removeItem(key);reply({ok:true});return;}
  if(msg?.type==='burHistoryGet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ids:[]});return;}try{const raw=JSON.parse(localStorage.getItem('fb-bur-history-v1:'+group)||'[]');reply({ids:Array.isArray(raw)?raw.filter(x=>/^\d{8,30}$/.test(String(x))).slice(-50000):[]});}catch{reply({ids:[]});}return;}
