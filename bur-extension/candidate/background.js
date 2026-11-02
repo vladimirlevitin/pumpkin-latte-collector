@@ -1,8 +1,8 @@
-/* FB Bur 0.5.30-alpha. Continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
+/* FB Bur 0.5.31-alpha. Continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
 importScripts('core.js','archive-state.js');
 const C=globalThis.FBBurCore,A=globalThis.FBBurArchive;
 const DB='bur-collector-v05', DBVER=1,JOB_KEY='burCollectorJob-v0520',CHECKPOINT_KEY='burCollectorCheckpoints-v0520',HISTORY_KEY='burCollectorHistory-v0520',RECEIPT_KEY='burCollectorExportReceipts-v1',ARCHIVE_KEY='burCollectorArchives-v1',SAVED_JOB_KEY='burCollectorSavedJobs-v1',ALARM='bur-collector-watchdog';
-const VERSION='0.5.30-alpha',CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
+const VERSION='0.5.31-alpha',CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
 const historyCache=new Map(),confirmedCache=new Map();
 const DEFAULTS={maxPosts:50,maxSteps:15000};
 function groupOf(url){try{const u=new URL(url);if(!['www.facebook.com','web.facebook.com'].includes(u.hostname))return null;return decodeURIComponent(u.pathname.match(/^\/groups\/([^/]+)/)?.[1]||'')||null;}catch{return null;}}
@@ -355,7 +355,7 @@ async function discovered(msg,sender){
  if(!j.feedOrder?.verified||msg.pageInstance!==j.feedOrder.page_instance)return {ignored:true,unverified_feed_order:true,stage:j.stage};
  if(msg.feed_order?.status==='other_order')return recoverFeedFromCheckpoint(j,'Во время сбора изменился порядок ленты',{feed_order:msg.feed_order});
  const observations=observationsFrom(msg),vh=Math.max(1,Number(msg.viewportHeight)||observations[0]?.viewportHeight||800);
- j.steps+=Math.min(1,Number(msg.step)||0);j.lastSeen=now();let candidateRows=[];
+ j.steps+=Math.min(1,Number(msg.step)||0);j.lastSeen=now();if(Number.isFinite(Number(msg.pruned)))j.prunedCards=Number(msg.pruned);let candidateRows=[];
  if(j.liveBoundaryPending){
   j.liveBoundaryScanSteps=(j.liveBoundaryScanSteps||0)+1;
   const boundaryId=String(j.liveBoundaryPostId||j.checkpointPostId||'');

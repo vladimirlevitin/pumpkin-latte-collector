@@ -1,4 +1,4 @@
-/* FB Bur 0.5.30-alpha: feed-order observations + structured comment threads + live page identity. */
+/* FB Bur 0.5.31-alpha: feed-order observations + structured comment threads + live page identity. */
 (() => {
 'use strict';
 if(window.__burCollector0524)return;window.__burCollector0524=true;
@@ -14,6 +14,36 @@ function currentCards(group,opts={}){
  if(!nodes.length){const fallback=C.permalinkPostRoot(document,group,location.href);if(fallback)nodes=[fallback];}
  for(const node of nodes){const row=C.extractCard(node,group,location.href);if(row)found.set(row.key,row);}
  return [...found.values()];
+}
+// 0.5.31: memory guard. Facebook keeps every scrolled feed card in the page; after
+// 6-7 months of history the tab reached ~6 GB and froze. Cards far above the viewport
+// whose IDs were already handed to the worker are emptied in place: media released,
+// children removed, the outer element keeps its exact height so the scroll position
+// and every card below it stay where they were. The checkpoint / live boundary and the
+// nearest cards above the viewport are never touched.
+const PRUNE={submitted:new Set(),pruned:0,keep:6,above:3};
+function rememberSubmitted(observations){for(const o of observations||[])if(o?.post?.post_id)PRUNE.submitted.add(String(o.post.post_id));}
+function releaseMedia(node){
+ for(const v of node.querySelectorAll('video')){try{v.pause();v.removeAttribute('src');v.querySelectorAll('source').forEach(x=>x.removeAttribute('src'));v.load();}catch{}}
+ for(const img of node.querySelectorAll('img')){try{img.removeAttribute('srcset');img.src='data:image/gif;base64,R0lGODlhAQABAAAAACw=';}catch{}}
+}
+function pruneFeed(job){
+ if(!isFeed()||!job)return 0;
+ const vh=Math.max(1,Number(window.innerHeight)||800),protect=new Set([job.checkpointPostId,job.liveBoundaryPostId,job.lastCollectedPostId].filter(Boolean).map(String));
+ const passed=[];
+ for(const node of C.postNodes(document)){
+  if(node.dataset?.burPruned)continue;
+  const r=node.getBoundingClientRect?.();if(!r||!(r.bottom<-PRUNE.above*vh)||!(r.height>0))continue;
+  const row=C.extractCard(node,job.group,location.href);const id=row?.post_id&&String(row.post_id);
+  if(!id||protect.has(id)||!PRUNE.submitted.has(id))continue;
+  passed.push({node,bottom:r.bottom,height:r.height});
+ }
+ passed.sort((a,b)=>b.bottom-a.bottom);
+ let n=0;
+ for(const {node,height} of passed.slice(PRUNE.keep)){
+  try{releaseMedia(node);node.style.boxSizing='border-box';node.style.height=height+'px';node.style.minHeight=height+'px';node.style.maxHeight=height+'px';node.style.overflow='hidden';node.style.contain='strict';node.replaceChildren();node.dataset.burPruned='1';node.removeAttribute('role');if(node.hasAttribute('data-pagelet')){node.dataset.burPagelet=node.getAttribute('data-pagelet');node.removeAttribute('data-pagelet');}n++;}catch{}
+ }
+ PRUNE.pruned+=n;return n;
 }
 function feedObservations(group){
  const found=new Map(),vh=Math.max(1,Number(window.innerHeight)||800);
@@ -89,7 +119,7 @@ async function seekCheckpoint(initial){
   if(!job.feedOrder?.verified||job.feedOrder.page_instance!==PAGE_INSTANCE||order.status==='other_order'){await send('feedOrderLost',{pageInstance:PAGE_INSTANCE,feed_order:order});return;}
   if(await handleObstruction(job,'поиск checkpoint'))return;
   const result=await S.step({job,doc:document,view:window,scroll:F,observe:()=>feedObservations(job.group),wait:delay,
-   submit:observations=>send('discover',{observations,pageInstance:PAGE_INSTANCE,feed_order:C.inspectFeedOrder(document),step:1,viewportHeight:Math.max(1,Number(window.innerHeight)||800)}),
+   submit:async observations=>{const r=await send('discover',{observations,pageInstance:PAGE_INSTANCE,feed_order:C.inspectFeedOrder(document),step:1,viewportHeight:Math.max(1,Number(window.innerHeight)||800),pruned:PRUNE.pruned});if(r?.seekingCheckpoint){rememberSubmitted(observations);pruneFeed(job);}return r;},
    stopped:async()=>{const j=await send('status');return !j||j.id!==initial.id||j.paused||j.stage!=='discover'||!j.checkpointPending;}});
   if(result.stop)return;
   if(result.stalled){await send('endDiscovery',{pageInstance:PAGE_INSTANCE,reason:'поиск остановился без подтверждённого продвижения',diagnostics:result.diagnostics});return;}
@@ -121,7 +151,8 @@ async function discover(job){
  const nodes=C.postNodes(document);C.expandVisible(nodes,12,'post');await delay(450);
  if(await handleObstruction(job,'разведка после раскрытия'))return;
  const observations=feedObservations(group);
- const r=await send('discover',{observations,pageInstance:PAGE_INSTANCE,feed_order:C.inspectFeedOrder(document),step:1,viewportHeight:Math.max(1,Number(window.innerHeight)||800)});
+ const r=await send('discover',{observations,pageInstance:PAGE_INSTANCE,feed_order:C.inspectFeedOrder(document),step:1,viewportHeight:Math.max(1,Number(window.innerHeight)||800),pruned:PRUNE.pruned});
+ if(r&&r.stage==='discover'){rememberSubmitted(observations);pruneFeed(job);}
  if(!r||r.stage!=='discover')return;
  if(r.seekingCheckpoint)noNew=0;else if(r.added)noNew=0;else noNew++;
  const movement=await F.advance(document,window,delay);
@@ -260,7 +291,7 @@ async function tick(){if(busy)return;busy=true;let again=false;try{
  else if(j.tabRole==='deep'&&j.stage==='deep')await deep(j);
  }catch(e){console.warn('FB Бур (задание сохранено):',String(e.message||e).slice(0,200));}finally{busy=false;if(again)setTimeout(tick,80);}}
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='burPing'){reply({ready:true,version:'0.5.30-alpha',location:location.pathname,href:location.href,pageInstance:PAGE_INSTANCE,scrollY:Number(window.scrollY)||0,obstruction:F.obstruction(document,window),detailPost:Boolean(F.detailDialog(document,window))});return;}
+ if(msg?.type==='burPing'){reply({ready:true,version:'0.5.31-alpha',pruned:PRUNE.pruned,jsHeapMB:Math.round((performance?.memory?.usedJSHeapSize||0)/1048576),location:location.pathname,href:location.href,pageInstance:PAGE_INSTANCE,scrollY:Number(window.scrollY)||0,obstruction:F.obstruction(document,window),detailPost:Boolean(F.detailDialog(document,window))});return;}
  if(msg?.type==='burCheckpointGet'){const group=groupFromURL();if(!group||msg.group!==group){reply({post_id:null});return;}reply({post_id:localStorage.getItem('fb-bur-checkpoint-v3:'+group)||null});return;}
  if(msg?.type==='burCheckpointSet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ok:false});return;}const key='fb-bur-checkpoint-v3:'+group;if(msg.post_id)localStorage.setItem(key,String(msg.post_id));else localStorage.removeItem(key);reply({ok:true});return;}
  if(msg?.type==='burHistoryGet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ids:[]});return;}try{const raw=JSON.parse(localStorage.getItem('fb-bur-history-v1:'+group)||'[]');reply({ids:Array.isArray(raw)?raw.filter(x=>/^\d{8,30}$/.test(String(x))).slice(-50000):[]});}catch{reply({ids:[]});}return;}
