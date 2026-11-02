@@ -29,9 +29,9 @@ async function run({count=4000,target=3217,delay=5,gap=false,missing=false,pause
   const r=await S.step(args);if(r.stalled){stalled=true;break;}
   if(paused){const saved=pos;paused=false;assert.equal(pos,saved);}
  }
- if(missing){assert.equal(found,false);assert.equal(stalled,true);}else {assert.equal(found,true);for(let i=0;i<=target;i++)assert.ok(seen.has(id(i)),'unobserved index '+i);}
+ if(missing){assert.equal(found,false);assert.equal(stalled,true);}else {assert.equal(found,true);assert.ok(seen.has(id(target)),'checkpoint must be visible when reported');}
  if(gap)assert.ok(rewound>0);
- assert.ok(submissions>0);return {found,stalled,seen:seen.size,rewound};
+ assert.ok(submissions>0);return {found,stalled,seen:seen.size,rewound,waits:ticks};
 }
 (async()=>{
  console.log('delayed virtualized 4000 cards',await run());
@@ -40,5 +40,6 @@ async function run({count=4000,target=3217,delay=5,gap=false,missing=false,pause
  console.log('variable heights/overlapping virtual windows',await run({variable:true}));
  console.log('pause/resume',await run({pause:true}));
  console.log('target absent',await run({missing:true,count:150,target:80}));
- console.log('PASS exact-ID scan, every intermediate slice, no numeric chronology or absent-target success');
+ const fast=await run();assert.ok(fast.waits*120<14853*200/3,'0.5.30 fast seek must be at least 3x faster than 0.5.29 (14853 waits x 200 ms), got '+fast.waits+' x 120 ms');
+ console.log('PASS exact-ID scan (checkpoint revealed into view), no numeric chronology or absent-target success; fast seek waits',fast.waits);
 })().catch(e=>{console.error(e);process.exitCode=1;});

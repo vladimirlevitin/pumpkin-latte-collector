@@ -1,4 +1,4 @@
-/* FB Bur 0.5.29-alpha: feed-order observations + structured comment threads + live page identity. */
+/* FB Bur 0.5.30-alpha: feed-order observations + structured comment threads + live page identity. */
 (() => {
 'use strict';
 if(window.__burCollector0524)return;window.__burCollector0524=true;
@@ -126,7 +126,11 @@ async function discover(job){
  if(r.seekingCheckpoint)noNew=0;else if(r.added)noNew=0;else noNew++;
  const movement=await F.advance(document,window,delay);
  if(movement.blocked){await send('obstructed',{stage:'discover',diagnostics:movement.blocked});return;}
- await delay(1400); // Facebook often loads the next feed slice asynchronously
+ // 0.5.30: wait the full 1.4 s only when Facebook has not rendered anything below
+ // the viewport yet; with posts already loaded ahead, a short settle is enough.
+ const vhNow=Math.max(1,Number(window.innerHeight)||800);
+ const ahead=feedObservations(group).filter(o=>Number.isFinite(o.top)&&o.top>=vhNow*0.6).length;
+ await delay(ahead>=2?450:1400); // Facebook often loads the next feed slice asynchronously
  noMove=movement.moved?0:noMove+1;
  if(noMove===8||noMove===16){await delay(noMove===8?3000:7000);const probe=await F.advance(document,window,delay);if(probe.moved){noMove=0;noNew=0;return;}}
  if(noNew>=36||noMove>=24){
@@ -248,14 +252,15 @@ async function deep(job){
   await send('deepSnapshot',{post:withDate(combined),scrolled,expanded,coverage});
  }catch(e){try{await send('deepError',{id:expected,error:String(e.message||e)});}catch{}}
 }
-async function tick(){if(busy)return;busy=true;try{
+async function tick(){if(busy)return;busy=true;let again=false;try{
  const j=await send('status');if(!j||j.paused||j.group!==groupFromURL())return;
  const cycle=j.id+'|'+(j.resumeCount||0)+'|'+(j.batchNumber||1);if(lastJobId!==cycle){noNew=0;noMove=0;lastJobId=cycle;}
- if(j.tabRole==='feed'&&j.stage==='discover')await discover(j);
+ // 0.5.30: the next feed step starts right away instead of waiting for the 2.6 s timer.
+ if(j.tabRole==='feed'&&j.stage==='discover'){await discover(j);again=!document.hidden;}
  else if(j.tabRole==='deep'&&j.stage==='deep')await deep(j);
- }catch(e){console.warn('FB Бур (задание сохранено):',String(e.message||e).slice(0,200));}finally{busy=false;}}
+ }catch(e){console.warn('FB Бур (задание сохранено):',String(e.message||e).slice(0,200));}finally{busy=false;if(again)setTimeout(tick,80);}}
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='burPing'){reply({ready:true,version:'0.5.29-alpha',location:location.pathname,href:location.href,pageInstance:PAGE_INSTANCE,scrollY:Number(window.scrollY)||0,obstruction:F.obstruction(document,window),detailPost:Boolean(F.detailDialog(document,window))});return;}
+ if(msg?.type==='burPing'){reply({ready:true,version:'0.5.30-alpha',location:location.pathname,href:location.href,pageInstance:PAGE_INSTANCE,scrollY:Number(window.scrollY)||0,obstruction:F.obstruction(document,window),detailPost:Boolean(F.detailDialog(document,window))});return;}
  if(msg?.type==='burCheckpointGet'){const group=groupFromURL();if(!group||msg.group!==group){reply({post_id:null});return;}reply({post_id:localStorage.getItem('fb-bur-checkpoint-v3:'+group)||null});return;}
  if(msg?.type==='burCheckpointSet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ok:false});return;}const key='fb-bur-checkpoint-v3:'+group;if(msg.post_id)localStorage.setItem(key,String(msg.post_id));else localStorage.removeItem(key);reply({ok:true});return;}
  if(msg?.type==='burHistoryGet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ids:[]});return;}try{const raw=JSON.parse(localStorage.getItem('fb-bur-history-v1:'+group)||'[]');reply({ids:Array.isArray(raw)?raw.filter(x=>/^\d{8,30}$/.test(String(x))).slice(-50000):[]});}catch{reply({ids:[]});}return;}
