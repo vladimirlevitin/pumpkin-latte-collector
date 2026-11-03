@@ -13,7 +13,7 @@ const chrome={downloads:{search:async({id})=>[{id,state:downloadState,exists:tru
  update:async(id,data)=>{const t=await chrome.tabs.get(id);Object.assign(t,data);return t;},
  create:async data=>{const t={id:nextTabId++,url:data.url||'about:blank',active:Boolean(data.active)};tabs.set(t.id,t);return t;},
  reload:async id=>{await chrome.tabs.get(id);reloads++;return tabs.get(id);},
- sendMessage:async(id,msg)=>{const t=await chrome.tabs.get(id);if(!connected)throw Error('no receiver');if(msg.type==='burPing')return {ready:true,version:'0.5.31-alpha',location:new URL(t.url).pathname,pageInstance:feedPageInstance,scrollY:feedScrollY,obstruction:null,detailPost:/\/posts\//.test(t.url)};if(msg.type==='burCheckpointGet')return {post_id:pageCheckpoints[msg.group]||null};if(msg.type==='burCheckpointSet'){if(msg.post_id)pageCheckpoints[msg.group]=String(msg.post_id);else delete pageCheckpoints[msg.group];return {ok:true};}if(msg.type==='burHistoryGet')return {ids:pageHistories[msg.group]||[]};if(msg.type==='burHistorySet'){pageHistories[msg.group]=Array.isArray(msg.ids)?msg.ids.map(String):[];return {ok:true};}return {ready:true};},
+ sendMessage:async(id,msg)=>{const t=await chrome.tabs.get(id);if(!connected)throw Error('no receiver');if(msg.type==='burPing')return {ready:true,version:'0.5.32-alpha',location:new URL(t.url).pathname,pageInstance:feedPageInstance,scrollY:feedScrollY,obstruction:null,detailPost:/\/posts\//.test(t.url)};if(msg.type==='burCheckpointGet')return {post_id:pageCheckpoints[msg.group]||null};if(msg.type==='burCheckpointSet'){if(msg.post_id)pageCheckpoints[msg.group]=String(msg.post_id);else delete pageCheckpoints[msg.group];return {ok:true};}if(msg.type==='burHistoryGet')return {ids:pageHistories[msg.group]||[]};if(msg.type==='burHistorySet'){pageHistories[msg.group]=Array.isArray(msg.ids)?msg.ids.map(String):[];return {ok:true};}return {ready:true};},
  onUpdated:{addListener:cb=>tabUpdatedListener=cb},onRemoved:{addListener:cb=>tabRemovedListener=cb}
 },scripting:{executeScript:async()=>{injections++;connected=true;}},alarms:{create(){},onAlarm:{addListener:cb=>alarmListener=cb}}};
 function spawn(){const context={chrome,indexedDB,IDBKeyRange,URL,console,setTimeout,clearTimeout,Date,structuredClone,fetch:()=>{requests++;throw Error('MUST NOT call model or API')}};context.globalThis=context;const ctx=vm.createContext(context);context.importScripts=(...files)=>{for(const file of files)vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),ctx,{filename:file});};vm.runInContext(fs.readFileSync(path.join(root,'background.js'),'utf8'),ctx,{filename:'background.js'});}
@@ -57,9 +57,10 @@ async function deepAll(){let j=await extCall('status');while(j.stage==='deep'){c
  assert.equal([...posts.values()].find(p=>String(p.post_id)===failedPostId)?.deep?.status,'failed','fallback must not count as completed Deep');
  await deepAll();j=await extCall('status');assert.equal(j.stage,'exporting');assert.equal(j.deepErrors,1);
  await extCall('exportComplete',{batchNumber:2,sessionId:j.id,sha256:'c'.repeat(64),downloadId:12,filename:'partial.json'},exportSender());
- j=await extCall('status');assert.equal(j.stage,'stalled');assert.equal(j.queue.length,1);assert.equal(j.batchDeepTotal,5);
+ // 0.5.32: the incomplete post is retried automatically once, without a pause.
+ j=await extCall('status');assert.equal(j.stage,'deep');assert.equal(j.paused,false);assert.equal(j.queue.length,1);assert.equal(j.batchDeepTotal,5);assert.equal(j.autoRetry.attempts,1);
  assert.equal(storage['burCollectorCheckpoints-v0520'].backpackIL.post_id,makePost(4).post_id);
- spawn();await extCall('resume',{tabId:5,url:tabs.get(5).url});await deepAll();j=await extCall('status');
+ spawn();await deepAll();j=await extCall('status');
  assert.equal(j.stage,'exporting');assert.equal(j.deepErrors,0);assert.equal(j.lastCollectedPostId,makePost(9).post_id);
  await extCall('exportComplete',{batchNumber:2,sessionId:j.id,sha256:'b'.repeat(64),downloadId:12,filename:'b2.json'},exportSender());
  j=await extCall('status');assert.equal(j.batchNumber,3);assert.equal(j.completedBatches,2);assert.equal(j.sessionPosts,10);assert.equal(j.liveBoundaryPostId,makePost(9).post_id);assert.equal(j.feedContinuationMode,'same_document');assert.equal(reloads,0);

@@ -1,8 +1,8 @@
-/* FB Bur 0.5.31-alpha. Continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
+/* FB Bur 0.5.32-alpha. Continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
 importScripts('core.js','archive-state.js');
 const C=globalThis.FBBurCore,A=globalThis.FBBurArchive;
 const DB='bur-collector-v05', DBVER=1,JOB_KEY='burCollectorJob-v0520',CHECKPOINT_KEY='burCollectorCheckpoints-v0520',HISTORY_KEY='burCollectorHistory-v0520',RECEIPT_KEY='burCollectorExportReceipts-v1',ARCHIVE_KEY='burCollectorArchives-v1',SAVED_JOB_KEY='burCollectorSavedJobs-v1',ALARM='bur-collector-watchdog';
-const VERSION='0.5.31-alpha',CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
+const VERSION='0.5.32-alpha',AUTO_DEEP_RETRIES=1,CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
 const historyCache=new Map(),confirmedCache=new Map();
 const DEFAULTS={maxPosts:50,maxSteps:15000};
 function groupOf(url){try{const u=new URL(url);if(!['www.facebook.com','web.facebook.com'].includes(u.hostname))return null;return decodeURIComponent(u.pathname.match(/^\/groups\/([^/]+)/)?.[1]||'')||null;}catch{return null;}}
@@ -493,6 +493,25 @@ async function exportComplete(msg){
  receipts[key]={group:j.group,sha256:msg.sha256,downloadId:msg.downloadId,filename:downloaded.filename||msg.filename,retained:true,import_verified:false,incomplete:Boolean(j.deepErrors||retry.length||orderUnverified),feed_order:j.feedOrder||null,ids:order,at:new Date().toISOString(),previous:previousReceipt&&previousReceipt.sha256!==msg.sha256?previousReceipt:null};
  if(j.deepErrors||retry.length){
   if(!retry.length)throw Error('Ошибки Deep не согласованы с локальным архивом');
+  // 0.5.32: недочитанные посты больше не останавливают ночной сбор. Сначала один автоматический повтор,
+  // затем такие посты помечаются как пропущенные (текст и видимые комментарии уже сохранены) и пакет закрывается.
+  // Пауза, поставленная пользователем, и options.autoSkipDeep===false возвращают прежнее поведение.
+  const attempt=j.autoRetry?.batch===j.batchNumber?Number(j.autoRetry.attempts)||0:0;
+  const auto=j.options?.autoSkipDeep!==false&&!j.paused;
+  if(auto&&attempt<AUTO_DEEP_RETRIES){
+   j.autoRetry={batch:j.batchNumber,attempts:attempt+1};
+   j.queue=retry;j.index=0;j.deepErrors=0;j.stage='deep';j.paused=false;j.stall=null;
+   j.note='Неполный JSON сохранён. Автоматически повторяю '+retry.length+' пост(ов), попытка '+(attempt+1)+'.';j.updatedAt=now();
+   await setJob(j,{[RECEIPT_KEY]:receipts});await navigateCurrent(j);return j;
+  }
+  if(auto&&retry.every(id=>byId.has(String(id)))){
+   const at=new Date().toISOString();
+   for(const id of retry){const row=await getOne(keyOf(j.group,id));if(!row)continue;row.deep={...(row.deep||{}),status:'captured_unverified',fallback:false,skipped_auto:true,skipped_at:at};if(row.text_flags)row.text_flags.truncated=false;await putOne(row);}
+   j.autoSkipped=[...(j.autoSkipped||[]),...retry.map(String)].slice(-500);j.autoRetry=null;
+   j.queue=retry;j.index=retry.length;j.deepErrors=0;j.stage='exporting';j.paused=false;j.stall=null;
+   j.note='Не удалось дочитать '+retry.length+' пост(ов) и после повтора — пропущены автоматически (текст сохранён). Сохраняю пакет и продолжаю.';j.updatedAt=now();
+   await setJob(j,{[RECEIPT_KEY]:receipts});await openExport(j);return j;
+  }
   j.queue=retry;j.index=0;j.deepErrors=0;j.stage='stalled';j.paused=true;
   j.stall={at:new Date().toISOString(),reason:'JSON сохранён, но часть постов требует повторного Deep',resumeStage:'deep'};
   j.note='Неполный JSON сохранён. Checkpoint не сдвинут. Продолжить — повторить '+retry.length+' постов.';j.updatedAt=now();
