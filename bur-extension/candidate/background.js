@@ -1,8 +1,9 @@
-/* FB Bur 0.5.32-alpha. Continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
+/* FB Bur 0.5.33-alpha. Continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
 importScripts('core.js','archive-state.js');
 const C=globalThis.FBBurCore,A=globalThis.FBBurArchive;
+const JOB_LITE_KEY='burCollectorJobLite-v1';
 const DB='bur-collector-v05', DBVER=1,JOB_KEY='burCollectorJob-v0520',CHECKPOINT_KEY='burCollectorCheckpoints-v0520',HISTORY_KEY='burCollectorHistory-v0520',RECEIPT_KEY='burCollectorExportReceipts-v1',ARCHIVE_KEY='burCollectorArchives-v1',SAVED_JOB_KEY='burCollectorSavedJobs-v1',ALARM='bur-collector-watchdog';
-const VERSION='0.5.32-alpha',AUTO_DEEP_RETRIES=1,CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
+const VERSION='0.5.33-alpha',AUTO_DEEP_RETRIES=1,CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
 const historyCache=new Map(),confirmedCache=new Map();
 const DEFAULTS={maxPosts:50,maxSteps:15000};
 function groupOf(url){try{const u=new URL(url);if(!['www.facebook.com','web.facebook.com'].includes(u.hostname))return null;return decodeURIComponent(u.pathname.match(/^\/groups\/([^/]+)/)?.[1]||'')||null;}catch{return null;}}
@@ -18,11 +19,21 @@ async function getJob(){return (await chrome.storage.local.get(JOB_KEY))[JOB_KEY
 // do not lazy-load Facebook comments. Keep the display awake while a job is running.
 function keepAwake(j){try{if(!chrome.power)return;const active=j&&!j.paused&&['discover','deep','exporting'].includes(j.stage);
  if(active)chrome.power.requestKeepAwake('display');else chrome.power.releaseKeepAwake();}catch(_){}}
+// 0.5.33: the feed tab polls "am I still running?" many times per seek step. Answer from a
+// tiny mirror of the job instead of reading and cloning the whole job each time.
+function liteJob(j){return j?{id:j.id,group:j.group,stage:j.stage,paused:Boolean(j.paused),checkpointPending:Boolean(j.checkpointPending),rewindPending:Boolean(j.rewindPending)}:null;}
+let savedWriteAt=0;
 async function setJob(j,extra={}){
  keepAwake(j);
- j.updatedAt=now();const saved=(await chrome.storage.local.get(SAVED_JOB_KEY))[SAVED_JOB_KEY]||{};
- saved[j.group]||={};saved[j.group][j.runMode||'history']=j;
- await chrome.storage.local.set({[JOB_KEY]:j,[SAVED_JOB_KEY]:saved,...extra});return j;
+ j.updatedAt=now();
+ // 0.5.33: during checkpoint seek the job is written on every step. The per-group saved
+ // copy (a second, larger write) is refreshed at most every 20 s then; the live job key
+ // is always written in full.
+ const seeking=j.stage==='discover'&&j.checkpointPending&&!Object.keys(extra).length;
+ if(seeking&&now()-savedWriteAt<20000){await chrome.storage.local.set({[JOB_KEY]:j,[JOB_LITE_KEY]:liteJob(j)});return j;}
+ const saved=(await chrome.storage.local.get(SAVED_JOB_KEY))[SAVED_JOB_KEY]||{};
+ saved[j.group]||={};saved[j.group][j.runMode||'history']=j;savedWriteAt=now();
+ await chrome.storage.local.set({[JOB_KEY]:j,[SAVED_JOB_KEY]:saved,[JOB_LITE_KEY]:liteJob(j),...extra});return j;
 }
 async function archiveMap(){return (await chrome.storage.local.get(ARCHIVE_KEY))[ARCHIVE_KEY]||{};}
 async function archiveFor(group){const map=await archiveMap();return map[group]||A.empty(group);}
@@ -375,8 +386,12 @@ async function discovered(msg,sender){
   j.checkpointScanSteps=(j.checkpointScanSteps||0)+1;
   const cp=observations.find(o=>String(o.post.post_id)===String(j.checkpointPostId)&&Number.isFinite(o.top)&&Number.isFinite(o.bottom)&&o.bottom>0&&o.top<vh);
   if(!cp){
-   rememberCheckpointSeen(j,observations.filter(o=>Number.isFinite(o.top)&&o.top<vh).map(o=>o.post.post_id));
-   j.note='Аварийное восстановление: ищу checkpoint '+j.checkpointPostId+'; проходы '+j.checkpointScanSteps+'. До него ничего не сохранено.';
+   // 0.5.33: seek now jumps several screens at once, so cards can pass without entering
+   // the viewport. Remember every rendered card above the checkpoint (or all of them when
+   // the checkpoint is not rendered yet): they are newer than it and must not be re-admitted.
+   const cpAny=observations.find(o=>String(o.post.post_id)===String(j.checkpointPostId)&&Number.isFinite(o.top));
+   rememberCheckpointSeen(j,observations.filter(o=>Number.isFinite(o.top)&&(cpAny?o.top<cpAny.top-4:true)).map(o=>o.post.post_id));
+   j.note='Перемотка к месту продолжения '+j.checkpointPostId+': шаг '+j.checkpointScanSteps+'. До него ничего не сохраняю.';
    if(j.steps>=j.options.maxSteps||msg.exhausted)return stall(j,'Checkpoint '+j.checkpointPostId+' не найден после полного лимита проходов',msg.diagnostics,'discover');
    await setJob(j);return {added:0,updated:0,stage:j.stage,discovered:j.discovered,seekingCheckpoint:true,checkpoint:j.checkpointPostId,seenBeforeCheckpoint:j.checkpointSeenIds.length};
   }
@@ -412,6 +427,12 @@ async function discovered(msg,sender){
  }
  else await setJob(j);
  const latest=await getJob();return {...r,stage:latest.stage,discovered:latest.discovered,seekingCheckpoint:false,checkpointFound:latest.checkpointFound,checkpoint:latest.checkpointPostId,discoveryTail:latest.discoveryOrder.slice(-3)};
+}
+async function seekKick(msg,sender){
+ const j=await getJob();if(!j||j.stage!=='discover'||j.paused||!j.checkpointPending||senderRole(j,sender)!=='feed')return {ignored:true};
+ j.lastSeen=now();j.seekKicks=(j.seekKicks||0)+1;
+ j.note='Facebook перестал подгружать ленту при перемотке. Встряхиваю ленту '+msg.kick+'/'+msg.limit+' и жду, позиция не теряется.';
+ await setJob(j);return {ok:true};
 }
 async function endDiscovery(msg,sender){
  const j=await getJob();if(!j||j.stage!=='discover'||j.paused||senderRole(j,sender)!=='feed')return j;
@@ -539,14 +560,16 @@ async function exportComplete(msg){
  if(!wasPaused)await resumeFeedAtLiveBoundary(j);return getJob();}
 async function exportFailed(msg){const j=await getJob();if(!j||j.stage!=='exporting')return {ignored:true};return stall(j,'Не удалось автоматически сохранить JSON-пакет',{batch:j.batchNumber,error:msg.error||null},'exporting');}
 let mutex=Promise.resolve();function serial(task){const next=mutex.then(task,task);mutex=next.catch(()=>{});return next;}
-chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{serial(async()=>{
+chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
+ if(msg?.type==='seekStatus'){chrome.storage.local.get(JOB_LITE_KEY).then(async r=>sendResponse({ok:true,result:r[JOB_LITE_KEY]||liteJob(await getJob())}),e=>sendResponse({ok:false,error:safeError(e)}));return true;}
+ serial(async()=>{
  if(sender.frameId&&sender.frameId!==0)return {ignored:true};
  const exportUrl=chrome.runtime.getURL('export.html'),isExport=sender.url?.split(/[?#]/,1)[0]===exportUrl;
  const j=await getJob();
  if(sender.tab&&!isExport){
   const role=senderRole(j,sender);
   if(msg.type==='status')return role?{...j,tabRole:role}:null;
-  if(['discover','rewindResult','endDiscovery','feedOrderLost'].includes(msg.type)&&role!=='feed')return {ignored:true};
+  if(['discover','rewindResult','endDiscovery','feedOrderLost','seekKick'].includes(msg.type)&&role!=='feed')return {ignored:true};
   if(['deepReady','deepExpanding','deepMismatch','deepProgress','deepPassEnd','deepSnapshot','deepError'].includes(msg.type)&&role!=='deep')return {ignored:true};
   if(msg.type==='obstructed'&&!role)return {ignored:true};
   if(['start','resume','collectFound','pause','resetCheckpoint','archiveStatus'].includes(msg.type))return {ignored:true};
@@ -562,6 +585,7 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{serial(async()=
   case 'rewindResult':return rewindResult(msg,sender);
   case 'feedOrderLost':return feedOrderLost(msg,sender);
   case 'discover':return discovered(msg,sender);
+  case 'seekKick':return seekKick(msg,sender);
   case 'obstructed':return obstructed(msg,sender);
   case 'endDiscovery':return endDiscovery(msg,sender);
   case 'deepReady':return deepState(msg,sender,'READY');

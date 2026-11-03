@@ -42,13 +42,18 @@ async function step({job,doc,view,scroll,observe,wait,submit,stopped}){
  const candidates=scroll.getCandidates(doc,view),vh=Math.max(1,Number(view.innerHeight)||800);
  const blocked=scroll.obstruction(doc,view);if(blocked)return {stalled:true,diagnostics:{reason:'obstruction',blocked}};
  const oldIds=allIds(before);let moved=false,after=before;
+ const lastTop=Math.max(0,...before.filter(x=>x.post?.post_id&&Number.isFinite(x.top)).map(x=>x.top));
  for(const el of candidates){
   const pos=scroll.position(el,doc,view);
   const root=doc.scrollingElement||doc.documentElement;
   const set=setter(el);
   for(let attempt=0;attempt<4;attempt++){
    if(await stopped())return {stop:true};
-   const amount=Math.max(40,Math.round(vh*(s.stable>=4?1.5:.5)/2**attempt));
+   // 0.5.33: once the feed is stable, jump straight to the last card Facebook has
+   // already rendered (up to 8 screens) instead of 1.5 screens: the next slice starts
+   // loading sooner. The overlap/rewind check below still guards against gaps.
+   const base=s.stable>=4?Math.min(vh*8,Math.max(vh*1.5,lastTop-vh*.3)):vh*.5;
+   const amount=Math.max(40,Math.round(base/2**attempt));
    set(pos+amount);
    const rendered=rows=>rows.some(x=>Number.isFinite(x.top)&&before.some(b=>String(b.post?.post_id)===String(x.post?.post_id)&&Number.isFinite(b.top)&&b.top-x.top>=Math.min(20,amount/2)));
    after=await settle(rendered);
@@ -76,5 +81,7 @@ async function step({job,doc,view,scroll,observe,wait,submit,stopped}){
  if(moved){after=await reveal(after);if(!after)return {stop:true};const r=await submit(after);if(!r?.seekingCheckpoint||await stopped())return {stop:true};}
  return {stalled:s.misses>=12,batchSize:s.stable>=20?50:10,diagnostics:{reason:'stalled_or_unavailable',...s,observed:ids(after).size}};
 }
-return {step};
+// 0.5.33: after a kick (feed nudged when Facebook stopped loading) start counting misses afresh.
+function reset(doc){const s=states.get(doc);if(s){s.misses=0;s.stable=0;}}
+return {step,reset};
 });
