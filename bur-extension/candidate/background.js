@@ -1,9 +1,9 @@
-/* FB Bur 0.5.33-alpha. Continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
+/* FB Bur 0.5.34-alpha. Continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
 importScripts('core.js','archive-state.js');
 const C=globalThis.FBBurCore,A=globalThis.FBBurArchive;
 const JOB_LITE_KEY='burCollectorJobLite-v1';
 const DB='bur-collector-v05', DBVER=1,JOB_KEY='burCollectorJob-v0520',CHECKPOINT_KEY='burCollectorCheckpoints-v0520',HISTORY_KEY='burCollectorHistory-v0520',RECEIPT_KEY='burCollectorExportReceipts-v1',ARCHIVE_KEY='burCollectorArchives-v1',SAVED_JOB_KEY='burCollectorSavedJobs-v1',ALARM='bur-collector-watchdog';
-const VERSION='0.5.33-alpha',AUTO_DEEP_RETRIES=1,CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
+const VERSION='0.5.34-alpha',AUTO_DEEP_RETRIES=1,MAX_UNAVAILABLE_RELOADS=3,UNAVAILABLE_RELOAD_DELAYS=[4000,8000,15000],CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
 const historyCache=new Map(),confirmedCache=new Map();
 const DEFAULTS={maxPosts:50,maxSteps:15000};
 function groupOf(url){try{const u=new URL(url);if(!['www.facebook.com','web.facebook.com'].includes(u.hostname))return null;return decodeURIComponent(u.pathname.match(/^\/groups\/([^/]+)/)?.[1]||'')||null;}catch{return null;}}
@@ -488,6 +488,28 @@ async function endDeepPass(msg,sender){
  await setJob(j);await notifyTab(deepId(j));return {continue:true,comment_count:row?.comments?.length||0};
 }
 async function completeDeep(msg,sender){const j=await getJob();if(!j||j.stage!=='deep'||j.paused||senderRole(j,sender)!=='deep')return {ignored:true};const id=j.queue[j.index];if(String(msg.post?.post_id||'')!==String(id)||postIdOf(sender.tab?.url,j.group)!==id)return {ignored:true};const row=C.normalizePost(msg.post,j.group);if(row.group!==j.group)return {ignored:true};await putMany([row],j.group);if(msg.fallback||row.text_flags?.truncated||msg.post?.text_flags?.truncated){return failDeep({id,error:'Deep incomplete: '+String(msg.fallback||'text_truncated'),details:{fallback:msg.fallback||null,coverage:msg.coverage||null,reason:'Card or expanded text not verified; discovery snapshot retained for retry'}},sender);}const merged=await getOne(row.key);merged.deep={status:'captured_unverified',at:new Date().toISOString(),visible_comment_count:merged.comments?.length||0,completeness:'unknown_not_all_threads_verified',coverage:msg.coverage||null,passes:(j.deepPasses||0)+1,scrolled:Number(msg.scrolled)||0,expanded:Number(msg.expanded)||0,fallback:msg.fallback||null};await putOne(merged);j.index++;j.deepDone++;j.lastSeen=now();await setJob(j);if(j.index>=j.queue.length)await finishBatch(j);else await navigateCurrent(j);return {ok:true,index:j.index};}
+// 0.5.34: Facebook sometimes opens a post with "Страница сейчас недоступна" (a reload fixes it). The page script reports it;
+// reload the Deep tab up to MAX_UNAVAILABLE_RELOADS times with growing pauses before the post counts as a Deep error.
+// The reload is scheduled, not awaited, so the serial message queue is never blocked.
+async function deepUnavailable(msg,sender){
+ const j=await getJob();if(!j||j.stage!=='deep'||j.paused||senderRole(j,sender)!=='deep')return {ignored:true};
+ const id=j.queue[j.index];if(String(msg.id)!==String(id))return {ignored:true};
+ if(j.unavailableId!==id){j.unavailableId=id;j.unavailableReloads=0;j.reloadPendingUntil=0;}
+ if(now()<(j.reloadPendingUntil||0))return {waiting:true};
+ const n=j.unavailableReloads||0;
+ if(n>=MAX_UNAVAILABLE_RELOADS){j.unavailableId=null;j.unavailableReloads=0;j.reloadPendingUntil=0;await setJob(j);
+  return failDeep({id,error:'Facebook: «Страница сейчас недоступна» после '+n+' перезагрузок'},sender);}
+ const wait=UNAVAILABLE_RELOAD_DELAYS[Math.min(n,UNAVAILABLE_RELOAD_DELAYS.length-1)];
+ j.unavailableReloads=n+1;j.reloadPendingUntil=now()+wait+3000;j.deepPhase='NAVIGATING';j.navStartedAt=now();j.deepUnavailableTotal=(j.deepUnavailableTotal||0)+1;
+ j.note='Пакет '+j.batchNumber+': deep '+(j.index+1)+'/'+j.queue.length+'; Facebook: «Страница сейчас недоступна», перезагрузка '+(n+1)+'/'+MAX_UNAVAILABLE_RELOADS+' через '+Math.round(wait/1000)+' с';
+ await setJob(j);
+ setTimeout(()=>{void serial(async()=>{const cur=await getJob();
+  if(!cur||cur.paused||cur.stage!=='deep'||cur.queue[cur.index]!==id||cur.unavailableId!==id)return;
+  try{await chrome.tabs.reload(cur.deepTabId);}catch(e){console.warn('Bur deep reload',safeError(e));}
+  cur.reloadPendingUntil=now()+2500;cur.deepPhase='NAVIGATING';cur.navStartedAt=now();await setJob(cur);
+ });},wait);
+ return {reloading:true,attempt:n+1,in_ms:wait};
+}
 async function failDeep(msg,sender){const j=await getJob();if(!j||j.stage!=='deep'||j.paused||sender?.tab?.id!==deepId(j))return {ignored:true};const id=j.queue[j.index];if(String(msg.id)!==String(id))return {ignored:true};const p=await getOne(keyOf(j.group,id));if(p){p.deep={status:'failed',error:String(msg.error||'unknown').slice(0,240),at:new Date().toISOString(),diagnostics:msg.details||null};await putOne(p);}j.deepErrors++;j.index++;await setJob(j);if(j.index>=j.queue.length)await finishBatch(j);else await navigateCurrent(j);return {ok:true,index:j.index};}
 async function openExport(j){const url=chrome.runtime.getURL('export.html')+'?auto=1&batch='+j.batchNumber+'&session='+j.id;let tab=null;if(j.exportTabId){try{tab=await chrome.tabs.get(j.exportTabId);}catch{}}if(tab)await chrome.tabs.update(j.exportTabId,{url,active:false});else{tab=await chrome.tabs.create({url,active:false});if(tab?.id)j.exportTabId=tab.id;}j.exportStartedAt=now();await setJob(j);return j;}
 async function finishBatch(j){
@@ -595,6 +617,7 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
   case 'deepPassEnd':return endDeepPass(msg,sender);
   case 'deepSnapshot':return completeDeep(msg,sender);
   case 'deepError':return failDeep(msg,sender);
+  case 'deepUnavailable':return deepUnavailable(msg,sender);
   case 'exportSlice':{
    if(!isExport)return {ignored:true};if(!j)return {items:[],job:null,total:0};
    const batchIds=new Set((j.discoveryOrder?.length?j.discoveryOrder:j.queue||[]).map(String));

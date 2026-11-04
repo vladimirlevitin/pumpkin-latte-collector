@@ -1,4 +1,4 @@
-/* FB Bur 0.5.33-alpha: feed-order observations + structured comment threads + live page identity. */
+/* FB Bur 0.5.34-alpha: feed-order observations + structured comment threads + live page identity. */
 (() => {
 'use strict';
 if(window.__burCollector0524)return;window.__burCollector0524=true;
@@ -193,6 +193,12 @@ async function discover(job){
      diagnostics:{noNew,noMove,scroll:movement.tries,visibleCards:observations.filter(x=>x.visible).length,totalCards:observations.length,href:location.pathname}});
  }
 }
+// 0.5.34: is Facebook's "Страница сейчас недоступна" showing in the post dialog, in any visible dialog, or on the whole page?
+function unavailableOnPage(){
+ if(C.unavailableNotice(F.detailDialog(document,window)))return true;
+ for(const {el} of F.visibleDialogs(document,window))if(C.unavailableNotice(el))return true;
+ return C.unavailableNotice(document.body);
+}
 async function deep(job){
  const expected=job.queue[job.index];if(!expected)return;
  const actual=getPostId();
@@ -209,6 +215,7 @@ async function deep(job){
   job=await send('deepReady',{id:expected});
   if(!job||job.deepPhase!=='READY')return;
  }
+ if(unavailableOnPage()){await send('deepUnavailable',{id:expected,cycle:-1});return;}
  if(await handleObstruction(job,'подробное извлечение'))return;
  try{
   job=await send('deepExpanding',{id:expected});
@@ -225,6 +232,8 @@ async function deep(job){
    const refreshed=await send('status');if(!refreshed||refreshed.paused||refreshed.stage!=='deep'||refreshed.queue[refreshed.index]!==expected||refreshed.deepPhase==='NAVIGATING')return;
    if(i>0&&i%2===1)await tryHover(); // tooltip did not open first time (slow page): retry a few times
    const modalRoot=F.detailDialog(document,window);
+   // 0.5.34: "Страница сейчас недоступна" inside the post dialog: ask the worker to reload the tab instead of waiting out all cycles.
+   if(!combined?.comments?.length&&unavailableOnPage()){await send('deepUnavailable',{id:expected,cycle:i});return;}
    const nodes=C.postNodes(document,null,{includeDialog:Boolean(modalRoot)}).filter(n=>!modalRoot||modalRoot.contains(n));
    const fallback=C.permalinkPostRoot(document,job.group,location.href);
    const sourceNodes=nodes.length?nodes:modalRoot?[modalRoot]:fallback?[fallback]:[];
@@ -315,7 +324,7 @@ async function tick(){if(busy)return;busy=true;let again=false;try{
  else if(j.tabRole==='deep'&&j.stage==='deep')await deep(j);
  }catch(e){console.warn('FB Бур (задание сохранено):',String(e.message||e).slice(0,200));}finally{busy=false;if(again)setTimeout(tick,80);}}
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='burPing'){reply({ready:true,version:'0.5.33-alpha',pruned:PRUNE.pruned,jsHeapMB:Math.round((performance?.memory?.usedJSHeapSize||0)/1048576),location:location.pathname,href:location.href,pageInstance:PAGE_INSTANCE,scrollY:Number(window.scrollY)||0,obstruction:F.obstruction(document,window),detailPost:Boolean(F.detailDialog(document,window))});return;}
+ if(msg?.type==='burPing'){reply({ready:true,version:'0.5.34-alpha',pruned:PRUNE.pruned,jsHeapMB:Math.round((performance?.memory?.usedJSHeapSize||0)/1048576),location:location.pathname,href:location.href,pageInstance:PAGE_INSTANCE,scrollY:Number(window.scrollY)||0,obstruction:F.obstruction(document,window),detailPost:Boolean(F.detailDialog(document,window))});return;}
  if(msg?.type==='burCheckpointGet'){const group=groupFromURL();if(!group||msg.group!==group){reply({post_id:null});return;}reply({post_id:localStorage.getItem('fb-bur-checkpoint-v3:'+group)||null});return;}
  if(msg?.type==='burCheckpointSet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ok:false});return;}const key='fb-bur-checkpoint-v3:'+group;if(msg.post_id)localStorage.setItem(key,String(msg.post_id));else localStorage.removeItem(key);reply({ok:true});return;}
  if(msg?.type==='burHistoryGet'){const group=groupFromURL();if(!group||msg.group!==group){reply({ids:[]});return;}try{const raw=JSON.parse(localStorage.getItem('fb-bur-history-v1:'+group)||'[]');reply({ids:Array.isArray(raw)?raw.filter(x=>/^\d{8,30}$/.test(String(x))).slice(-50000):[]});}catch{reply({ids:[]});}return;}

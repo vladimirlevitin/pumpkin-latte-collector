@@ -1,0 +1,31 @@
+'use strict';
+// 0.5.34: "Страница сейчас недоступна" in the Deep tab -> reload up to 3 times, then a normal Deep error. Never blocks the queue.
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const src=fs.readFileSync(path.join(__dirname,'test-worker.js'),'utf8');
+const cut=src.indexOf('(async()=>{');
+const head=src.slice(0,cut);
+const body=`(async()=>{
+ const realST=setTimeout;globalThis.setTimeout=(f,ms,...a)=>realST(f,(ms===4000||ms===15000)?5:ms,...a);
+ spawn();
+ let j=await extCall('start',{tabId:5,url:tabs.get(5).url,options:{maxPosts:5,maxSteps:500}});
+ await extCall('rewindResult',{result:{ok:true,feed_order:{verified:true,order:'new_posts',source:'fixture_visible_sort'}}},feedSender());
+ await extCall('discover',{posts:[0,1,2,3,4].map(makePost),step:1},feedSender());
+ j=await extCall('status');assert.equal(j.stage,'deep');
+ const id=j.queue[0],K='burCollectorJob-v0520',before=reloads;
+ let r=await extCall('deepUnavailable',{id},deepSender(j));assert.equal(r.reloading,true);assert.equal(r.attempt,1);
+ j=await extCall('status');assert.equal(j.deepPhase,'NAVIGATING');assert.match(j.note,/перезагрузка 1\\/3/);
+ r=await extCall('deepUnavailable',{id},deepSender(j));assert.equal(r.waiting,true,'repeat report while the reload is pending is ignored');
+ r=await extCall('deepUnavailable',{id:'999'},deepSender(j));assert.equal(r.ignored,true,'report for another post is ignored');
+ await new Promise(x=>realST(x,80));assert.equal(reloads-before,1,'deep tab reloaded once');
+ j=await extCall('status');assert.equal(j.deepErrors,0,'a reload is not a Deep error');
+ storage[K].reloadPendingUntil=0;storage[K].unavailableReloads=2;
+ r=await extCall('deepUnavailable',{id},deepSender(j));assert.equal(r.attempt,3);
+ await new Promise(x=>realST(x,80));assert.equal(reloads-before,2,'third reload happened');
+ storage[K].reloadPendingUntil=0;
+ await extCall('deepUnavailable',{id},deepSender(j));
+ j=await extCall('status');assert.equal(j.deepErrors,1,'after 3 reloads the post counts as a Deep error');assert.equal(j.index,1,'queue moved to the next post');
+ const row=[...posts.values()].find(p=>String(p.post_id)===id);assert.equal(row.deep.status,'failed');assert.match(row.deep.error,/недоступна/);
+ console.log('deep unavailable worker: ok');
+})().catch(e=>{console.error(e);process.exit(1);});
+`;
+eval(head+body);

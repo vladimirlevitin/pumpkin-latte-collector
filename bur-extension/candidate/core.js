@@ -1,11 +1,11 @@
-/* FB Bur core 0.5.33-alpha; offline-testable, no Facebook API bypass. */
+/* FB Bur core 0.5.34-alpha; offline-testable, no Facebook API bypass. */
 (function(root, factory) {
   const api = factory();
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.FBBurCore = api;
 })(typeof window !== 'undefined' ? window : globalThis, function() {
   'use strict';
-  const collector='fb-group-bur/0.5.33-alpha';
+  const collector='fb-group-bur/0.5.34-alpha';
   const clean = (s) => String(s || '').replace(/\u00a0/g,' ').replace(/\r\n/g,'\n').replace(/[ \t]+/g,' ').replace(/\n[ \t]*/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
   const cut = (s,n=40000) => clean(s).slice(0,n);
   const IDPAT=/(?:\/groups\/([^/?#]+)\/(?:posts|permalink)\/(\d+))|(?:[?&]story_fbid=(\d+))/;
@@ -706,6 +706,10 @@
     if(!proof.verified)return fail('selection_unconfirmed');
     return {...proof,status:'selected_new_posts',previous_label:found.label};
   }
+  // 0.5.34: Facebook sometimes opens the post dialog with "Страница сейчас недоступна" (transient: a reload fixes it).
+  // Pure text check so it can be tested without a DOM: a short dialog/page whose text is that notice.
+  const UNAVAILABLE_RE=/Страница сейчас недоступна|This page isn.t available right now|технической проблемой, которую мы уже решаем|a technical issue that we.re working on/i;
+  function unavailableNotice(root){const t=String(root?.innerText||root?.textContent||'');return t.length>0&&t.length<1200&&UNAVAILABLE_RE.test(t);}
   return {inspectFeedOrder,ensureNewPosts,ensureAllComments,uniqueMedia,collector,clean,hash,idFromPermalink,canonicalUrl,textQuality,truncated,
-    parseDateEvidence,parseFacebookDate,estimateRelativeDate,betterDate,postTimestampLink,hoverExactDate,facebookCommentCount,normalizePost,mergePosts,postNodes,extractCard,extractVisibleComments,expandVisible,permalinkPostRoot};
+    parseDateEvidence,parseFacebookDate,estimateRelativeDate,betterDate,postTimestampLink,hoverExactDate,facebookCommentCount,normalizePost,mergePosts,postNodes,extractCard,extractVisibleComments,expandVisible,permalinkPostRoot,unavailableNotice};
 });
