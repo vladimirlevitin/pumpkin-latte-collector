@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Исследователь глубин Facebook",
+  "version": "0.1.0",
+  "description": "Проверка переходов и раскрытия обсуждений. Только локальный журнал диагностики, без архива публикаций.",
+  "permissions": ["storage", "unlimitedStorage", "tabs", "webRequest", "alarms"],
+  "host_permissions": ["https://www.facebook.com/*"],
+  "background": {"service_worker": "background.js"},
+  "action": {"default_title": "Исследователь глубин Facebook"},
+  "content_scripts": [{"matches": ["https://www.facebook.com/*"], "js": ["dom.js", "probe.js"], "run_at": "document_idle"}]
+}

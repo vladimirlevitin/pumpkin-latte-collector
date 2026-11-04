@@ -1,0 +1,19 @@
+<!doctype html><html lang="ru"><meta charset="utf-8"><title>Исследователь глубин Facebook</title>
+<link rel="stylesheet" href="panel.css">
+<main><h1>Исследователь глубин Facebook <small>0.1.0</small></h1>
+<p>Открывает публикации и раскрывает обсуждения. Записывает действия и ошибки в локальный журнал. Тексты, авторы и медиа не сохраняются. Файлы не выгружаются.</p>
+<p>Перед запуском поставьте Бур на паузу. Сравнивайте группы и скорость в отдельных прогонах.</p>
+<section><label>Открытая вкладка Facebook <select id="tab"></select></label><button id="refresh">Обновить список</button>
+<label>Проверка <select id="mode"><option value="walk">Идти вглубь группы с текущего места</option><option value="single">Только открытый пост по прямой ссылке</option></select></label>
+<div class="grid"><label>Пауза между действиями, секунд <input id="delay" type="number" value="3" min="1" max="60"></label>
+<label>Максимум постов <input id="posts" type="number" value="30" min="1" max="1000"></label>
+<label>Максимум раскрытий на пост <input id="clicks" type="number" value="1500" min="1" max="10000"></label>
+<label>Максимум минут на пост <input id="minutes" type="number" value="20" min="1" max="120"></label></div>
+<button id="start">Начать новый прогон</button><button id="pause">Пауза</button><button id="resume">Продолжить</button>
+<button id="retry">Проверить тот же пост заново</button></section>
+<h2>Состояние</h2><pre id="status">Загрузка…</pre>
+<p>При ошибке проверка останавливается. «Проверить тот же пост заново» — отдельная попытка после паузы с новым открытием адреса. Журнал прежней попытки остаётся.</p>
+<h2>Журнал <small id="count"></small></h2><p>Хранится между перезапусками Chrome. Ниже — последние 300 событий выбранного прогона. Можно выделить и скопировать текст.</p>
+<select id="runs"></select><button id="older">Показать более ранние события</button><pre id="journal"></pre>
+<p>Счётчик DOM — число загруженных элементов обсуждения, а не общее количество комментариев. Причина на стороне сервера может остаться неизвестной: содержимое сетевых ответов не читается.</p>
+</main><script src="panel.js"></script></html>
