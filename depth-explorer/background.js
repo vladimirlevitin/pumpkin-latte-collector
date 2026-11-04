@@ -12,6 +12,13 @@ const isPanel=sender=>sender.url?.startsWith(chrome.runtime.getURL('panel.html')
 function role(s,sender){return sender.tab?.id===s?.feedTab?'feed':sender.tab?.id===s?.deepTab?'deep':null;}
 async function log(s,kind,data={}){await append(s.id,kind,{phase:s.phase,current:s.current||null,checked:s.checked||0,feedSteps:s.feedSteps||0,elapsedMs:Date.now()-s.started,attempt:s.attempt||1,...data});}
 async function halt(s,reason,kind='paused'){if(!s)return;s.running=false;s.reason=reason;s.lastSignal=kind;s.pausedAt=Date.now();await log(s,kind,{reason});await save(s);}
+async function ensureProbe(tabId){
+ const ping=async()=>{try{const r=await chrome.tabs.sendMessage(tabId,{type:'ping'});return r?.ready&&r.version==='0.1.1';}catch{return false;}};
+ if(await ping())return 'already_connected';
+ await chrome.scripting.executeScript({target:{tabId},files:['dom.js','probe.js']});
+ if(!await ping())throw Error('Нет связи со вкладкой Facebook. Проверьте разрешение расширения на этом сайте и обновите вкладку.');
+ return 'connected_existing_tab';
+}
 async function openPost(s,id,reload=false){
  s.current=id;s.phase='detail';s.token=crypto.randomUUID();s.actions=0;s.postStarted=Date.now();s.navStarted=Date.now();s.lastBeat=Date.now();s.reason='Открывается пост';await save(s);
  const url=canonical(s.group,id);await log(s,'navigation_intent',{url,method:reload?'reload':'tabs.update direct permalink'});
@@ -29,11 +36,13 @@ async function handle(m,sender){
    const tab=await chrome.tabs.get(Number(m.tab)),i=identity(tab.url);if(!i)throw Error('Откройте группу или прямую ссылку на пост Facebook.');
    if(m.mode==='single'&&!i.post)throw Error('Для одиночной проверки откройте прямую ссылку на пост.');
    if(m.mode!=='single'&&i.post)throw Error('Для прохода вглубь выберите вкладку с лентой группы.');
+   const connection=await ensureProbe(tab.id);
    const n=(x,min,max,defaultValue)=>Math.max(min,Math.min(max,Number(x)||defaultValue));
    s={id:crypto.randomUUID(),group:i.group,mode:m.mode==='single'?'single':'walk',started:Date.now(),running:true,phase:m.mode==='single'?'detail':'seek',
     feedTab:m.mode==='single'?null:tab.id,deepTab:m.mode==='single'?tab.id:null,current:null,queue:[],seen:[],checked:0,feedSteps:0,attempt:1,reason:'Проверка запущена',lastBeat:Date.now(),
     config:{delay:n(m.delay,1,60,3)*1000,posts:n(m.posts,1,1000,30),clicks:n(m.clicks,1,10000,1500),minutes:n(m.minutes,1,120,20)}};
    await log(s,'run_start',{group:s.group,mode:s.mode,config:s.config,feedStart:'current position; no rewind',navigation:'direct permalink, separate feed/detail tabs as in Bur'});
+   await log(s,'probe_connected',{connection,tabRole:i.post?'deep':'feed'});
    const runs=(await chrome.storage.local.get('depthExplorerRuns1')).depthExplorerRuns1||[];runs.unshift({id:s.id,group:s.group,started:s.started,config:s.config});await chrome.storage.local.set({depthExplorerRuns1:runs});await save(s);
    if(i.post)await openPost(s,i.post,true);return s;
   }
@@ -41,6 +50,8 @@ async function handle(m,sender){
   if(m.type==='resume'){
    if(!s||s.running||s.phase==='done')throw Error('Нет приостановленного прогона.');
    if(s.lastSignal==='fault')throw Error('После ошибки используйте «Проверить тот же пост заново»: это сохранит разделение попыток.');
+   const connection=await ensureProbe(s.phase==='detail'?s.deepTab:s.feedTab);
+   await log(s,'probe_connected',{connection,resume:true});
    s.running=true;s.reason='Продолжение';s.lastBeat=Date.now();await log(s,'resume',{pauseMs:Date.now()-s.pausedAt});await save(s);return s;
   }
   if(m.type==='retry'){

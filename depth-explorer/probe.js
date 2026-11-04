@@ -1,5 +1,7 @@
 (() => {
 'use strict';
+if(window.__depthExplorerProbe?.version==='0.1.1'&&window.__depthExplorerProbe.alive())return;
+window.__depthExplorerProbe={version:'0.1.1',alive:()=>{try{return Boolean(chrome.runtime.id);}catch{return false;}}};
 const D=window.DepthDOM;let busy=false,sortAttempted=false,menuPending=false,postToken='',idle=0,previous='',lastControl=null,repeats=0;
 let pendingReply=null,ownedReplies=[];
 async function send(type,data={}){const r=await chrome.runtime.sendMessage({type,page:D.identity(location.href),...data});if(!r?.ok)throw Error(r?.error||'Нет ответа');return r.result;}
@@ -54,9 +56,9 @@ async function tick(){if(busy)return;busy=true;let interval=3000;
    await send('finished',{reason:'Состояние перестало меняться; полнота комментариев не проверяется',snapshot:snap});
   }
  }catch(e){try{await event('probe_exception',{name:e?.name||'Error'});await send('halt',{reason:'Ошибка диагностического сценария; см. журнал'});}catch{}}
- finally{busy=false;setTimeout(tick,interval);}
+ finally{busy=false;if(window.__depthExplorerProbe.alive())setTimeout(tick,interval);}
 }
-chrome.runtime.onMessage.addListener((m,s,reply)=>{if(m.type==='ping'){reply({ready:true});return;}});
+chrome.runtime.onMessage.addListener((m,s,reply)=>{if(m.type==='ping'){reply({ready:true,version:'0.1.1'});return;}});
 let observerPending=false;
 new MutationObserver(()=>{if(observerPending)return;observerPending=true;setTimeout(async()=>{observerPending=false;try{const s=await send('permission');if(s?.allowed)await check();}catch{}},350);}).observe(document.documentElement,{subtree:true,childList:true,characterData:true});
 document.addEventListener('visibilitychange',()=>{void event('visibility',{state:document.visibilityState}).catch(()=>{});});

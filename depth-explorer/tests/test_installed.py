@@ -17,8 +17,9 @@ htmlpost='''<!doctype html><meta charset="utf-8"><style>#thread article{display:
 error='<!doctype html><meta charset="utf-8"><main><h1>Страница сейчас недоступна</h1></main>'
 break_on_expand=[False]
 with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp,sync_playwright() as p:
- def launch():
-  ctx=p.chromium.launch_persistent_context(tmp,channel='chromium',headless=True,args=[f'--disable-extensions-except={root}',f'--load-extension={root}'])
+ def launch(preexisting=False):
+  args=['--enable-unsafe-extension-debugging']
+  ctx=p.chromium.launch_persistent_context(tmp,channel='chromium',headless=True,args=args,ignore_default_args=['--disable-extensions'])
   def route(q):
    if q.request.url.startswith('chrome-extension://'):q.continue_()
    elif q.request.url==feed:q.fulfill(body=htmlfeed,content_type='text/html')
@@ -30,15 +31,25 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp,sync_playwri
    elif q.request.url.startswith('https://www.facebook.com/api/graphql'):q.fulfill(body='{}',status=503,content_type='application/json')
    else:q.abort()
   ctx.route('**/*',route)
+  if not preexisting:ctx.browser.new_browser_cdp_session().send('Extensions.loadUnpacked',{'path':str(root)})
   return ctx
- ctx=launch()
+ ctx=launch(True)
+ page=ctx.new_page();page.goto(feed)
+ page.evaluate("()=>{document.body.style.minHeight='2500px';window.scrollTo(0,400)}")
+ assert page.evaluate('scrollY')==400
+ # Install the real unpacked extension AFTER Facebook is already open.
+ cdp=ctx.browser.new_browser_cdp_session()
+ installed=cdp.send('Extensions.loadUnpacked',{'path':str(root)})
  print('setup: isolated Chromium launched',flush=True)
+ base='chrome-extension://'+installed['id']
+ ui=ctx.new_page();ui.on('pageerror',lambda e:print('panel error: '+str(e),flush=True));ui.goto(base+'/panel.html');ui.set_default_timeout(10000)
  worker=ctx.service_workers[0] if ctx.service_workers else ctx.wait_for_event('serviceworker')
  worker.on('console',lambda m:print('worker console: '+m.text,flush=True))
- base=worker.url.rsplit('/',1)[0]
- ui=ctx.new_page();ui.on('pageerror',lambda e:print('panel error: '+str(e),flush=True));ui.goto(base+'/panel.html');ui.set_default_timeout(10000)
  print('setup: panel opened',flush=True)
- page=ctx.new_page();page.goto(feed)
+ assert base=='chrome-extension://'+installed['id']
+ missing=ui.evaluate("async()=>{const tab=(await chrome.tabs.query({})).find(t=>t.url==='https://www.facebook.com/groups/testgroup/');try{await chrome.tabs.sendMessage(tab.id,{type:'ping'});return false}catch{return true}}")
+ assert missing,'Regression precondition: existing FB tab unexpectedly has a live receiver'
+ print('setup: reproduced missing receiver in pre-existing Facebook tab; scroll position 400',flush=True)
  ui.bring_to_front()
  def send(kind,**kw):return ui.evaluate("async m=>{const r=await Promise.race([chrome.runtime.sendMessage(m),new Promise((_,reject)=>setTimeout(()=>reject(Error('worker reply timeout: '+m.type)),10000))]);if(!r.ok)throw Error(r.error);return r.result}",dict(type=kind,**kw))
  def state():return send('state')
@@ -58,13 +69,16 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp,sync_playwri
  tab=ui.evaluate("async()=> (await chrome.tabs.query({})).find(t=>t.url==='https://www.facebook.com/groups/testgroup/').id")
  ui.locator('#refresh').click();ui.locator('#tab').select_option(str(tab));ui.locator('#delay').fill('1');ui.locator('#start').click()
  print('setup: Start clicked',flush=True)
- first=until(lambda s:s and s.get('current')=='1772823333829701')
+ first=until(lambda s:s and s.get('current')=='1772823333829701',15)
  run=first['id']
  fault=until(lambda s:s and not s['running'] and s.get('lastSignal')=='fault',90)
  assert fault['current']=='1772475750531126',fault
  assert fault['checked']==1,fault
  def events():return send('journal',run=run)
  rows=events();kinds=[e['kind'] for e in rows]
+ assert any(e['kind']=='probe_connected' and e['data']['connection']=='connected_existing_tab' for e in rows)
+ assert any(e['kind']=='feed_scan' and e['data']['snapshot']['scrollY']==400 for e in rows)
+ print('PASS Start connects pre-existing tab without reload or scroll reset',flush=True)
  assert 'error_screen' in kinds and 'navigation_intent' in kinds and 'action_intent' in kinds,kinds
  assert any(e['kind']=='network_complete' and e['data']['status']==429 for e in rows),rows
  assert any(e['kind']=='observation' and e['data'].get('commentElements',0)>1000 for e in rows)

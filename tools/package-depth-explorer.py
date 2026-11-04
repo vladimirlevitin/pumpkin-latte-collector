@@ -5,7 +5,7 @@ p=argparse.ArgumentParser();p.add_argument('zip');p.add_argument('unpack');a=p.p
 src=Path(__file__).resolve().parents[1]/'depth-explorer'
 files=['manifest.json','background.js','dom.js','probe.js','panel.html','panel.js','panel.css','README-RU.txt','TEST-RESULT.txt']
 m=json.loads((src/'manifest.json').read_text(encoding='utf-8'))
-assert m['version']=='0.1.0'
+assert m['version']=='0.1.1'
 needed=[m['background']['service_worker']]+[f for c in m['content_scripts'] for f in c['js']]
 assert all(f in files and (src/f).is_file() for f in needed)
 dest=Path(a.zip).resolve();dest.parent.mkdir(parents=True,exist_ok=True)

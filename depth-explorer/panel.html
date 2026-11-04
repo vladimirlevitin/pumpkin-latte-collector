@@ -1,6 +1,6 @@
 <!doctype html><html lang="ru"><meta charset="utf-8"><title>Исследователь глубин Facebook</title>
 <link rel="stylesheet" href="panel.css">
-<main><h1>Исследователь глубин Facebook <small>0.1.0</small></h1>
+<main><h1>Исследователь глубин Facebook <small>0.1.1</small></h1>
 <p>Открывает публикации и раскрывает обсуждения. Записывает действия и ошибки в локальный журнал. Тексты, авторы и медиа не сохраняются. Файлы не выгружаются.</p>
 <p>Перед запуском поставьте Бур на паузу. Сравнивайте группы и скорость в отдельных прогонах.</p>
 <section><label>Открытая вкладка Facebook <select id="tab"></select></label><button id="refresh">Обновить список</button>
@@ -11,6 +11,7 @@
 <label>Максимум минут на пост <input id="minutes" type="number" value="20" min="1" max="120"></label></div>
 <button id="start">Начать новый прогон</button><button id="pause">Пауза</button><button id="resume">Продолжить</button>
 <button id="retry">Проверить тот же пост заново</button></section>
+<p id="notice" role="alert"></p>
 <h2>Состояние</h2><pre id="status">Загрузка…</pre>
 <p>При ошибке проверка останавливается. «Проверить тот же пост заново» — отдельная попытка после паузы с новым открытием адреса. Журнал прежней попытки остаётся.</p>
 <h2>Журнал <small id="count"></small></h2><p>Хранится между перезапусками Chrome. Ниже — последние 300 событий выбранного прогона. Можно выделить и скопировать текст.</p>
