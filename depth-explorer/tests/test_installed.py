@@ -15,6 +15,7 @@ htmlpost='''<!doctype html><meta charset="utf-8"><style>#thread article{display:
 <button onclick="let d=document.createElement('div');d.setAttribute('role','dialog');d.style.cssText='position:fixed;top:20px;left:20px;width:300px;height:200px;background:white';let a=document.createElement('article');a.setAttribute('role','article');let l=document.createElement('a');l.href='?comment_id=111111111';l.textContent='PRIVATE REPLY MUST NOT ENTER LOG';a.append(l);let b=document.createElement('button');b.textContent='Закрыть';b.onclick=()=>d.remove();d.append(a,b);document.body.append(d);this.remove()">Посмотреть 1 ответ</button>
 <div id="thread">'''+''.join(f'<article role="article"><a href="?comment_id={i+90000000}">date</a></article>' for i in range(1002))+'''</div></div>'''
 error='<!doctype html><meta charset="utf-8"><main><h1>Страница сейчас недоступна</h1></main>'
+htmlpost=htmlpost.replace('<div role="main">','<div role="dialog"><div role="dialog" aria-modal="true"><div role="main">',1)+'</div></div>'
 break_on_expand=[False]
 with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp,sync_playwright() as p:
  def launch(preexisting=False):
@@ -78,6 +79,8 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp,sync_playwri
  rows=events();kinds=[e['kind'] for e in rows]
  assert any(e['kind']=='probe_connected' and e['data']['connection']=='connected_existing_tab' for e in rows)
  assert any(e['kind']=='feed_scan' and e['data']['snapshot']['scrollY']==400 for e in rows)
+ assert any(e['kind']=='observation' and e['data'].get('dialogLayers')==2 and e['data']['dialogCount']==1 for e in rows)
+ print('PASS nested post dialog wrappers treated as one; independent reply dialog still opened and closed',flush=True)
  print('PASS Start connects pre-existing tab without reload or scroll reset',flush=True)
  assert 'error_screen' in kinds and 'navigation_intent' in kinds and 'action_intent' in kinds,kinds
  assert any(e['kind']=='network_complete' and e['data']['status']==429 for e in rows),rows

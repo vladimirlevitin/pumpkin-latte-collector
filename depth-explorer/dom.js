@@ -17,7 +17,8 @@ function signal(){
  if(/^\/(?:login|checkpoint|recover)(?:\/|\.php|$)/.test(location.pathname))return {kind:'authentication',label:'Facebook authentication/checkpoint URL'};
  return null;
 }
-function dialogs(){return [...document.querySelectorAll('[role="dialog"],[aria-modal="true"],dialog[open]')].filter(visible);}
+function dialogLayers(){return [...document.querySelectorAll('[role="dialog"],[aria-modal="true"],dialog[open]')].filter(visible);}
+function dialogs(){const layers=dialogLayers();return layers.filter(e=>!layers.some(other=>other!==e&&e.contains(other)));}
 function root(){const d=dialogs();return d.at(-1)||document.querySelector('[role="main"],main')||document.body;}
 const load=/^(?:(?:Смотреть|Посмотреть|Показать|Загрузить|Просмотреть)\s+(?:(?:другие|предыдущие|ещ[её]|больше|все|\d+[\s.,]?\d*)\s+)*(?:комментари(?:и|ев|й|я)|ответ(?:а|ов|ы)?)(?:\s+\d+)?|(?:View|See|Load)\s+(?:(?:more|previous|all|\d+)\s+)*(?:comments|replies|reply))$/iu;
 const sort=/^(?:Все комментарии|Самые актуальные|Наиболее актуальные|Самые новые|Новые|All comments|Most relevant|Newest)$/iu;
@@ -32,7 +33,7 @@ function controls(){const out=[];for(const e of root().querySelectorAll('button,
 }
 function snapshot(){const r=root(),articles=[...r.querySelectorAll('[role="article"]')];return {
  ready:document.readyState,visibility:document.visibilityState,online:navigator.onLine,
- dialogCount:dialogs().length,postBodies:r.querySelectorAll('[data-ad-preview="message"],[data-ad-comet-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="story_message"]').length,
+ dialogCount:dialogs().length,dialogLayers:dialogLayers().length,postBodies:r.querySelectorAll('[data-ad-preview="message"],[data-ad-comet-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="story_message"]').length,
  commentElements:articles.filter(a=>Boolean(a.querySelector('a[href*="comment_id="]'))).length,
  replyElements:r.querySelectorAll('a[href*="reply_comment_id="]').length,
  displayedCounts:[...r.querySelectorAll('button,[role="button"],span')].filter(e=>e.children.length===0&&visible(e)).map(e=>clean(e.textContent)).filter(t=>/^[\d\s.,]+(?:тыс\.?|млн\.?|[KkMm])?\s+(?:комментари(?:и|ев|й|я)|comments|ответ(?:а|ов|ы)?|replies)$/iu.test(t)).slice(0,20),

@@ -13,7 +13,7 @@ function role(s,sender){return sender.tab?.id===s?.feedTab?'feed':sender.tab?.id
 async function log(s,kind,data={}){await append(s.id,kind,{phase:s.phase,current:s.current||null,checked:s.checked||0,feedSteps:s.feedSteps||0,elapsedMs:Date.now()-s.started,attempt:s.attempt||1,...data});}
 async function halt(s,reason,kind='paused'){if(!s)return;s.running=false;s.reason=reason;s.lastSignal=kind;s.pausedAt=Date.now();await log(s,kind,{reason});await save(s);}
 async function ensureProbe(tabId){
- const ping=async()=>{try{const r=await chrome.tabs.sendMessage(tabId,{type:'ping'});return r?.ready&&r.version==='0.1.1';}catch{return false;}};
+ const ping=async()=>{try{const r=await chrome.tabs.sendMessage(tabId,{type:'ping'});return r?.ready&&r.version==='0.1.2';}catch{return false;}};
  if(await ping())return 'already_connected';
  await chrome.scripting.executeScript({target:{tabId},files:['dom.js','probe.js']});
  if(!await ping())throw Error('Нет связи со вкладкой Facebook. Проверьте разрешение расширения на этом сайте и обновите вкладку.');
