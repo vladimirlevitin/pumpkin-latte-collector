@@ -1,9 +1,9 @@
-/* FB Bur 0.5.34-alpha. Continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
+/* FB Bur 0.5.35-alpha. Continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
 importScripts('core.js','archive-state.js');
 const C=globalThis.FBBurCore,A=globalThis.FBBurArchive;
 const JOB_LITE_KEY='burCollectorJobLite-v1';
 const DB='bur-collector-v05', DBVER=1,JOB_KEY='burCollectorJob-v0520',CHECKPOINT_KEY='burCollectorCheckpoints-v0520',HISTORY_KEY='burCollectorHistory-v0520',RECEIPT_KEY='burCollectorExportReceipts-v1',ARCHIVE_KEY='burCollectorArchives-v1',SAVED_JOB_KEY='burCollectorSavedJobs-v1',ALARM='bur-collector-watchdog';
-const VERSION='0.5.34-alpha',AUTO_DEEP_RETRIES=1,MAX_UNAVAILABLE_RELOADS=3,UNAVAILABLE_RELOAD_DELAYS=[4000,8000,15000],CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
+const VERSION='0.5.35-alpha',AUTO_DEEP_RETRIES=1,MAX_FEED_LOSS_STREAK=3,MAX_UNAVAILABLE_RELOADS=3,UNAVAILABLE_RELOAD_DELAYS=[4000,8000,15000],CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
 const historyCache=new Map(),confirmedCache=new Map();
 const DEFAULTS={maxPosts:50,maxSteps:15000};
 function groupOf(url){try{const u=new URL(url);if(!['www.facebook.com','web.facebook.com'].includes(u.hostname))return null;return decodeURIComponent(u.pathname.match(/^\/groups\/([^/]+)/)?.[1]||'')||null;}catch{return null;}}
@@ -23,6 +23,17 @@ function keepAwake(j){try{if(!chrome.power)return;const active=j&&!j.paused&&['d
 // tiny mirror of the job instead of reading and cloning the whole job each time.
 function liteJob(j){return j?{id:j.id,group:j.group,stage:j.stage,paused:Boolean(j.paused),checkpointPending:Boolean(j.checkpointPending),rewindPending:Boolean(j.rewindPending)}:null;}
 let savedWriteAt=0;
+// 0.5.35: diagnostic log in extension storage (last DIAG_MAX events). Times are Israel local time.
+const DIAG_KEY='burDiagLog-v1',DIAG_MAX=300;
+async function diagLog(kind,data){
+ try{
+  const stamp=new Date().toLocaleString('sv-SE',{timeZone:'Asia/Jerusalem'});
+  const cur=(await chrome.storage.local.get(DIAG_KEY))[DIAG_KEY]||[];
+  cur.push({t:stamp,kind,v:VERSION,...(data||{})});
+  while(cur.length>DIAG_MAX)cur.shift();
+  await chrome.storage.local.set({[DIAG_KEY]:cur});
+ }catch(e){console.warn('Bur diag',safeError(e));}
+}
 async function setJob(j,extra={}){
  keepAwake(j);
  j.updatedAt=now();
@@ -228,7 +239,7 @@ async function resume(tabId,url){
  if(tabId!==feedId(j))throw Error('Сессия привязана к исходной вкладке ленты '+j.group+'. Вернитесь в неё.');
  if(groupOf(url)!==j.group)throw Error('Сессия привязана к группе '+j.group+'. Текущая вкладка открыта в другой группе.');
  if(j.archiveRunStarted)await archiveJob(j,state=>A.resume(state,j.id));
- j.deepNoGainPasses=0;j.paused=false;j.resumeCount=(j.resumeCount||0)+1;
+ j.deepNoGainPasses=0;j.feedRecoveryStreak=0;j.paused=false;j.resumeCount=(j.resumeCount||0)+1;
  if(j.stage==='stalled'){j.stage=j.stall?.resumeStage||'discover';j.stall=null;}
  await setJob(j);
  if(j.readyForDeep){j.readyForDeep=false;await beginDeep(j,'сохранённый участок');}
@@ -283,6 +294,12 @@ async function collectFound(tabId,url){
 }
 async function stall(j,reason,details,resumeStage){j.stage='stalled';j.paused=true;j.stall={at:new Date().toISOString(),reason,details:details||null,resumeStage:resumeStage||j.stage};j.note='Приостановлено: '+reason+'. Данные не отмечены как завершённый пакет.';await setJob(j);return j;}
 async function recoverFeedFromCheckpoint(j,reason,details=null){
+ // 0.5.35: remember WHY the feed position was lost; stop after repeated losses without any discovered post instead of looping.
+ j.feedRecoveryStreak=(j.discovered>0?0:(j.feedRecoveryStreak||0))+1;
+ let det='';try{det=JSON.stringify(details||null).slice(0,500);}catch{}
+ j.lastFeedLoss={at:new Date().toISOString(),reason,streak:j.feedRecoveryStreak};
+ await diagLog('feed_lost',{group:j.group,reason,streak:j.feedRecoveryStreak,steps:j.steps,discovered:j.discovered,rewindPending:Boolean(j.rewindPending),details:det});
+ if(j.feedRecoveryStreak>MAX_FEED_LOSS_STREAK)return stall(j,'Лента ' + j.feedRecoveryStreak + ' раз подряд теряет позицию, ни один пост не найден. Причина последней потери: '+reason,{reason,details:det},'discover');
  const boundary=String(j.lastCollectedPostId||j.checkpointPostId||'');
  const hasBoundary=/^\d{8,30}$/.test(boundary);
  const rows=await allPosts(j.group),byId=new Map(rows.map(p=>[String(p.post_id),p]));
@@ -483,7 +500,13 @@ async function endDeepPass(msg,sender){
  j.deepPasses=(j.deepPasses||0)+1;
  const gained=deepSignature(row)!==j.deepPassStartHash||Number(msg.scrolled)>0;
  j.deepNoGainPasses=gained?0:(j.deepNoGainPasses||0)+1;j.deepPhase='READY';j.deepCoverage=msg.coverage||null;
- if(msg.coverage?.settled&&msg.coverage?.known_incomplete||j.deepNoGainPasses>=3)return stall(j,'Обсуждение ещё не раскрыто полностью; промежуточные данные сохранены, граница не сдвинута',{coverage:msg.coverage||null,passes:j.deepPasses},'deep');
+ if(msg.coverage?.settled&&msg.coverage?.known_incomplete||j.deepNoGainPasses>=3){
+  // 0.5.35: one post whose discussion will not expand used to stop the whole run ("Требуется вмешательство" on every resume).
+  // Record it as a Deep error (comments gathered so far stay) and move on; the end-of-batch retry/auto-skip handles it like other Deep errors.
+  await diagLog('discussion_not_expanded',{group:j.group,post:j.queue[j.index],index:j.index,passes:j.deepPasses,no_gain:j.deepNoGainPasses,comments:row?.comments?.length||0,coverage:msg.coverage||null});
+  await setJob(j);
+  return failDeep({id:j.queue[j.index],error:'Deep incomplete: discussion_not_expanded',details:{coverage:msg.coverage||null,passes:j.deepPasses,comments:row?.comments?.length||0}},sender);
+ }
  j.note='Сохраняю длинное обсуждение: проход '+j.deepPasses+', комментариев '+(row?.comments?.length||0)+'. Тот же пост продолжается.';
  await setJob(j);await notifyTab(deepId(j));return {continue:true,comment_count:row?.comments?.length||0};
 }
@@ -497,6 +520,7 @@ async function deepUnavailable(msg,sender){
  if(j.unavailableId!==id){j.unavailableId=id;j.unavailableReloads=0;j.reloadPendingUntil=0;}
  if(now()<(j.reloadPendingUntil||0))return {waiting:true};
  const n=j.unavailableReloads||0;
+ await diagLog('unavailable_notice',{group:j.group,post:id,index:j.index,queue:j.queue.length,attempt:n+1,cycle:msg.cycle,phase:j.deepPhase,passes:j.deepPasses||0,...(msg.details||{})});
  if(n>=MAX_UNAVAILABLE_RELOADS){j.unavailableId=null;j.unavailableReloads=0;j.reloadPendingUntil=0;await setJob(j);
   return failDeep({id,error:'Facebook: «Страница сейчас недоступна» после '+n+' перезагрузок'},sender);}
  const wait=UNAVAILABLE_RELOAD_DELAYS[Math.min(n,UNAVAILABLE_RELOAD_DELAYS.length-1)];
