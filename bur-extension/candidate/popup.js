@@ -3,7 +3,7 @@ $('version').textContent='v'+(chrome.runtime.getManifest().version_name||chrome.
 async function ask(type,data={}){const r=await chrome.runtime.sendMessage({type,...data});if(!r?.ok)throw Error(r?.error||'Ошибка');return r.result;}
 function state(j){if(!j)return 'Нет задания. Откройте ленту группы Facebook и нажмите «Начать».';
  const stage=({discover:'Разведка',deep:'Подробное извлечение',exporting:'Сохранение пакета',stalled:'Требуется вмешательство',done:'Завершено'})[j.stage]||j.stage;
- return `Группа: ${j.group}\nРежим: ${j.runMode==='update'?'Новые публикации':'История группы'}\nВерхняя граница: ${j.archiveHead||'ещё не установлена'}\nИсторический хвост: ${j.archiveTail||'ещё не установлен'}\nЭтап: ${stage}${j.paused?' · пауза':''}\nПакет: ${j.batchNumber||1} · завершено: ${j.completedBatches||0} · всего: ${j.sessionPosts||0}\n${j.checkpointPostId?`Граница: ${j.checkpointPostId}${j.checkpointPending?' · аварийный поиск':''}`:''}\nТекущий пакет: ${j.discovered} из ${j.options?.maxPosts||'?'} · шагов: ${j.steps}${j.prunedCards?` · очищено из памяти: ${j.prunedCards}`:''}\nDeep: ${j.deepDone}/${j.batchDeepTotal??j.queue?.length??0} · ошибок: ${j.deepErrors||0}\n${j.note||''}`;
+ return `Группа: ${j.group}\nРежим: ${j.runMode==='list'?'Список постов ('+(j.listIds?.length||0)+')':j.runMode==='update'?'Новые публикации':'История группы'}\nВерхняя граница: ${j.archiveHead||'ещё не установлена'}\nИсторический хвост: ${j.archiveTail||'ещё не установлен'}\nЭтап: ${stage}${j.paused?' · пауза':''}\nПакет: ${j.batchNumber||1} · завершено: ${j.completedBatches||0} · всего: ${j.sessionPosts||0}\n${j.checkpointPostId?`Граница: ${j.checkpointPostId}${j.checkpointPending?' · аварийный поиск':''}`:''}\nТекущий пакет: ${j.discovered} из ${j.options?.maxPosts||'?'} · шагов: ${j.steps}${j.prunedCards?` · очищено из памяти: ${j.prunedCards}`:''}\nDeep: ${j.deepDone}/${j.batchDeepTotal??j.queue?.length??0} · ошибок: ${j.deepErrors||0}\n${j.note||''}`;
 }
 // 0.5.27/0.5.28: a page script cut off by an extension reload/reinstall keeps the feed still
 // while the job still says "Разведка". Ping the working tab and say so plainly.
@@ -38,4 +38,23 @@ $('pause').onclick=()=>op($('pause'),()=>ask('pause'));
 $('collect').onclick=()=>op($('collect'),async()=>{tab=await activeTab();await ask('collectFound',{tabId:tab.id,url:tab.url});});
 $('export').onclick=()=>chrome.tabs.create({url:chrome.runtime.getURL('export.html')});
 $('refresh').onclick=refresh;
+// 0.5.34.1: list mode.
+const listIds=()=>globalThis.FBBurCore.postIdsFromText($('listText').value);
+const countList=()=>{$('listCount').textContent='Постов в списке: '+listIds().length;};
+$('listText').oninput=countList;
+$('harvest').onclick=()=>op($('harvest'),async()=>{
+ tab=await activeTab();if(!groupOf(tab.url))throw Error('Откройте страницу Facebook-группы (например, поиск по группе)');
+ const [r]=await chrome.scripting.executeScript({target:{tabId:tab.id},func:()=>[...document.querySelectorAll('a[href]')].map(a=>a.href)});
+ const found=globalThis.FBBurCore.postIdsFromText((r?.result||[]).join('\n')),known=new Set(listIds()),fresh=found.filter(id=>!known.has(id));
+ const group=groupOf(tab.url);
+ $('listText').value=($('listText').value.trim()?$('listText').value.trim()+'\n':'')+fresh.map(id=>'https://www.facebook.com/groups/'+group+'/posts/'+id+'/').join('\n');countList();
+ $('listCount').textContent='Постов в списке: '+listIds().length+' (на странице найдено '+found.length+', новых '+fresh.length+'). Проверьте и удалите лишнее.';
+});
+$('startList').onclick=()=>op($('startList'),async()=>{
+ const j=await ask('status');
+ if(j&&j.runMode==='list'&&j.stage!=='done'&&j.paused){await ask('resume',{});return;}
+ tab=await activeTab();const ids=listIds();if(!ids.length)throw Error('Список пуст');
+ if(j&&j.stage!=='done'&&!j.paused)throw Error('Сначала поставьте текущий сбор на паузу');
+ await ask('startList',{url:tab.url,ids,replacePaused:Boolean(j?.paused)});
+});
 refresh();setInterval(refresh,3500);

@@ -1,9 +1,9 @@
-/* FB Bur 0.5.34-alpha. Continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
+/* FB Bur 0.5.34.1-alpha. List mode (Deep for pasted post links) + continuous feed identity: same document resumes in place; checkpoint recovery only after real feed loss. */
 importScripts('core.js','archive-state.js');
 const C=globalThis.FBBurCore,A=globalThis.FBBurArchive;
 const JOB_LITE_KEY='burCollectorJobLite-v1';
 const DB='bur-collector-v05', DBVER=1,JOB_KEY='burCollectorJob-v0520',CHECKPOINT_KEY='burCollectorCheckpoints-v0520',HISTORY_KEY='burCollectorHistory-v0520',RECEIPT_KEY='burCollectorExportReceipts-v1',ARCHIVE_KEY='burCollectorArchives-v1',SAVED_JOB_KEY='burCollectorSavedJobs-v1',ALARM='bur-collector-watchdog';
-const VERSION='0.5.34-alpha',AUTO_DEEP_RETRIES=1,MAX_UNAVAILABLE_RELOADS=3,UNAVAILABLE_RELOAD_DELAYS=[4000,8000,15000],CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
+const VERSION='0.5.34.1-alpha',AUTO_DEEP_RETRIES=1,MAX_UNAVAILABLE_RELOADS=3,UNAVAILABLE_RELOAD_DELAYS=[4000,8000,15000],CHECKPOINT_ALGORITHM='continuous_feed_v4',HISTORY_LIMIT=50000,now=()=>Date.now();
 const historyCache=new Map(),confirmedCache=new Map();
 const DEFAULTS={maxPosts:50,maxSteps:15000};
 function groupOf(url){try{const u=new URL(url);if(!['www.facebook.com','web.facebook.com'].includes(u.hostname))return null;return decodeURIComponent(u.pathname.match(/^\/groups\/([^/]+)/)?.[1]||'')||null;}catch{return null;}}
@@ -222,9 +222,61 @@ async function start({tabId,url,options={},replacePaused=false,startAfter=null,m
  if(hasCheckpoint){await chrome.tabs.reload(tabId);return j;}
  await notifyTab(tabId);return j;
 }
+// 0.5.34.1: list mode. Deep only for the posts the user pasted (e.g. the weekly free-ad posts). No feed tab,
+// no feed order, no checkpoints, no history, no archive boundaries: the regular history/update runs stay untouched.
+const LIST_MAX=2000;
+async function startList({url,text='',ids=null,replacePaused=false}){
+ const group=groupOf(url);
+ if(!group)throw Error('Откройте любую страницу нужной Facebook-группы (лента, поиск или пост)');
+ const list=Array.isArray(ids)?[...new Set(ids.map(String).filter(x=>/^\d{8,30}$/.test(x)))]:C.postIdsFromText(text);
+ if(!list.length)throw Error('Не найдено ни одной ссылки на пост группы');
+ if(list.length>LIST_MAX)throw Error('Слишком много постов за один раз: '+list.length+' (не больше '+LIST_MAX+')');
+ const existing=await getJob();
+ if(existing&&existing.stage!=='done'&&!(replacePaused&&existing.paused))throw Error('Сначала поставьте текущий сбор на паузу');
+ const id=now().toString(36)+'-'+Math.random().toString(36).slice(2,7);
+ const j={id,sessionId:id,runMode:'list',archiveManaged:false,archiveRunStarted:false,version:VERSION,group,tabId:null,feedTabId:null,deepTabId:null,exportTabId:null,
+  stage:'deep',paused:false,startedAt:now(),lastSeen:now(),batchStartedAt:now(),batchNumber:1,completedBatches:0,sessionPosts:0,sessionDeepDone:0,sessionDeepErrors:0,
+  steps:0,discovered:list.length,deepDone:0,deepErrors:0,deepPartial:0,queue:list.slice(),discoveryOrder:list.slice(),listIds:list.slice(),index:0,batchDeepTotal:list.length,batchDeepStartedAt:now(),
+  options:{maxPosts:list.length,maxSteps:0},feedOrder:null,checkpointPending:false,liveBoundaryPending:false,
+  note:'Список: '+list.length+' пост(ов). Подробный сбор идёт в отдельной вкладке; лента и границы архива не трогаются.'};
+ await setJob(j);
+ await ensureDeepTab(j);await navigateCurrent(j);return getJob();
+}
+async function resumeList(j){
+ j.deepNoGainPasses=0;j.paused=false;j.resumeCount=(j.resumeCount||0)+1;
+ if(j.stage==='stalled'){j.stage=j.stall?.resumeStage||'deep';j.stall=null;}
+ await setJob(j);
+ if(j.stage==='deep')await navigateCurrent(j);else if(j.stage==='exporting')await openExport(j);
+ return getJob();
+}
+// A long discussion that stops growing is saved as it is and the list moves on (no overnight pause).
+async function finishListPartial(j,row,coverage){
+ const id=j.queue[j.index];
+ if(row){row.deep={...(row.deep||{}),status:'captured_unverified',partial:true,at:new Date().toISOString(),visible_comment_count:row.comments?.length||0,completeness:'partial_no_progress',coverage:coverage||null,passes:j.deepPasses||0};await putOne(row);}
+ j.deepPartial=(j.deepPartial||0)+1;j.deepDone++;j.index++;j.lastSeen=now();
+ j.note='Список: пост '+id+' сохранён частично ('+(row?.comments?.length||0)+' комм.), обсуждение больше не раскрывается. Иду дальше.';
+ await setJob(j);if(j.index>=j.queue.length)await finishBatch(j);else await navigateCurrent(j);return {ok:true,partial:true,index:j.index};
+}
+async function listExportComplete(j,msg,receipts,retry,byId,downloaded){
+ const attempt=j.autoRetry?.batch===j.batchNumber?Number(j.autoRetry.attempts)||0:0;
+ if(retry.length&&attempt<AUTO_DEEP_RETRIES&&!j.paused){
+  j.autoRetry={batch:j.batchNumber,attempts:attempt+1};j.queue=retry;j.index=0;j.deepErrors=0;j.stage='deep';j.stall=null;
+  j.note='JSON сохранён. Повторяю '+retry.length+' недочитанных пост(ов) списка, попытка '+(attempt+1)+'.';
+  await setJob(j,{[RECEIPT_KEY]:receipts});await navigateCurrent(j);return j;
+ }
+ const order=j.listIds||j.discoveryOrder||[];
+ j.listMissing=retry.filter(id=>!byId.has(String(id))).map(String);j.listUnfinished=retry.filter(id=>byId.has(String(id))).map(String);
+ j.autoRetry=null;j.stage='done';j.paused=false;j.stall=null;j.completedBatches=1;j.sessionPosts=order.length;j.sessionDeepDone=order.length-retry.length;j.sessionDeepErrors=retry.length;
+ j.lastExport={at:new Date().toISOString(),batchNumber:j.batchNumber,downloadId:msg.downloadId??null,sha256:msg.sha256,filename:downloaded.filename||msg.filename||null,posts:order.length,boundary:null};
+ j.note='Готово: '+(order.length-j.listMissing.length)+' из '+order.length+' пост(ов) в файле '+String(msg.filename||'')+'.'+(j.deepPartial?' Частично (длинное обсуждение): '+j.deepPartial+'.':'')+(j.listUnfinished.length?' Недочитаны: '+j.listUnfinished.length+'.':'')+(j.listMissing.length?' Не открылись: '+j.listMissing.join(', ')+'.':'');
+ await setJob(j,{[RECEIPT_KEY]:receipts});
+ if(j.deepTabId){try{await chrome.tabs.remove(j.deepTabId);}catch{}}
+ return j;
+}
 async function pause(){const j=await getJob();if(!j)return null;j.paused=true;j.note='Сессия поставлена на паузу. Данные пакета сохранены.';if(j.archiveRunStarted)await archiveJob(j,state=>A.suspend(state,j.id));return setJob(j);}
 async function resume(tabId,url){
  const j=await getJob();if(!j)throw Error('Нет задания');
+ if(j.runMode==='list')return resumeList(j);
  if(tabId!==feedId(j))throw Error('Сессия привязана к исходной вкладке ленты '+j.group+'. Вернитесь в неё.');
  if(groupOf(url)!==j.group)throw Error('Сессия привязана к группе '+j.group+'. Текущая вкладка открыта в другой группе.');
  if(j.archiveRunStarted)await archiveJob(j,state=>A.resume(state,j.id));
@@ -483,6 +535,7 @@ async function endDeepPass(msg,sender){
  j.deepPasses=(j.deepPasses||0)+1;
  const gained=deepSignature(row)!==j.deepPassStartHash||Number(msg.scrolled)>0;
  j.deepNoGainPasses=gained?0:(j.deepNoGainPasses||0)+1;j.deepPhase='READY';j.deepCoverage=msg.coverage||null;
+ if((msg.coverage?.settled&&msg.coverage?.known_incomplete||j.deepNoGainPasses>=3)&&j.runMode==='list')return finishListPartial(j,row,msg.coverage);
  if(msg.coverage?.settled&&msg.coverage?.known_incomplete||j.deepNoGainPasses>=3)return stall(j,'Обсуждение ещё не раскрыто полностью; промежуточные данные сохранены, граница не сдвинута',{coverage:msg.coverage||null,passes:j.deepPasses},'deep');
  j.note='Сохраняю длинное обсуждение: проход '+j.deepPasses+', комментариев '+(row?.comments?.length||0)+'. Тот же пост продолжается.';
  await setJob(j);await notifyTab(deepId(j));return {continue:true,comment_count:row?.comments?.length||0};
@@ -515,7 +568,7 @@ async function openExport(j){const url=chrome.runtime.getURL('export.html')+'?au
 async function finishBatch(j){
  const order=j.discoveryOrder?.length?j.discoveryOrder:j.queue;j.lastCollectedPostId=order.length?String(order[order.length-1]):j.lastCollectedPostId||null;
  // Commit checkpoint only after the JSON download completes.
- j.stage='exporting';j.batchFinishedAt=now();j.note='Пакет '+j.batchNumber+' обработан. Автоматически сохраняю JSON; feed-вкладка не перемещалась.';await setJob(j);await openExport(j);return j;
+ j.stage='exporting';j.batchFinishedAt=now();j.note=j.runMode==='list'?'Список обработан. Сохраняю JSON.':'Пакет '+j.batchNumber+' обработан. Автоматически сохраняю JSON; feed-вкладка не перемещалась.';await setJob(j);await openExport(j);return j;
 }
 async function exportComplete(msg){
  const j=await getJob();
@@ -534,6 +587,7 @@ async function exportComplete(msg){
  const byId=new Map(batchRows.map(p=>[String(p.post_id),p]));
  const retry=order.filter(id=>{const row=byId.get(String(id));return !row||row.deep?.status!=='captured_unverified'||Boolean(row.deep?.fallback)||Boolean(row.text_flags?.truncated);});
  receipts[key]={group:j.group,sha256:msg.sha256,downloadId:msg.downloadId,filename:downloaded.filename||msg.filename,retained:true,import_verified:false,incomplete:Boolean(j.deepErrors||retry.length||orderUnverified),feed_order:j.feedOrder||null,ids:order,at:new Date().toISOString(),previous:previousReceipt&&previousReceipt.sha256!==msg.sha256?previousReceipt:null};
+ if(j.runMode==='list')return listExportComplete(j,msg,receipts,retry,byId,downloaded);
  if(j.deepErrors||retry.length){
   if(!retry.length)throw Error('Ошибки Deep не согласованы с локальным архивом');
   // 0.5.32: недочитанные посты больше не останавливают ночной сбор. Сначала один автоматический повтор,
@@ -594,10 +648,11 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
   if(['discover','rewindResult','endDiscovery','feedOrderLost','seekKick'].includes(msg.type)&&role!=='feed')return {ignored:true};
   if(['deepReady','deepExpanding','deepMismatch','deepProgress','deepPassEnd','deepSnapshot','deepError'].includes(msg.type)&&role!=='deep')return {ignored:true};
   if(msg.type==='obstructed'&&!role)return {ignored:true};
-  if(['start','resume','collectFound','pause','resetCheckpoint','archiveStatus'].includes(msg.type))return {ignored:true};
+  if(['start','startList','resume','collectFound','pause','resetCheckpoint','archiveStatus'].includes(msg.type))return {ignored:true};
  }
  switch(msg.type){
   case 'start':return start(msg);
+  case 'startList':return startList(msg);
   case 'pause':return pause();
   case 'resume':return resume(msg.tabId,msg.url);
   case 'collectFound':return collectFound(msg.tabId,msg.url);

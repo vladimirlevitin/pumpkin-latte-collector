@@ -5,7 +5,13 @@
 <div class="actions"><button id="start" class="primary">Начать / продолжить</button><button id="pause">Пауза</button></div>
 <button class="full" id="collect">Закончить разведку и собрать найденные</button>
 <button class="full" id="export">Скачать JSON</button><button class="full" id="refresh">Обновить статус</button>
+<details id="listBox" style="margin-top:10px;background:#fff;border:1px solid #cfdbe7;border-radius:8px;padding:8px"><summary style="cursor:pointer;font-weight:650">Список постов (реклама и др.)</summary>
+<p class="hint">Только эти посты: полный текст и все комментарии. Лента, граница архива и checkpoint не трогаются. Вставьте ссылки на посты (по одной в строке) или откройте страницу поиска группы, прокрутите её и нажмите «Взять ссылки».</p>
+<textarea id="listText" rows="5" style="width:100%;border:1px solid #b9cada;border-radius:7px;padding:6px;font:12px/1.4 monospace" placeholder="https://www.facebook.com/groups/…/posts/…/"></textarea>
+<small id="listCount">Постов в списке: 0</small>
+<button class="full" id="harvest">Взять ссылки с открытой страницы</button>
+<button class="full primary" id="startList">Собрать посты из списка</button></details>
 <div id="status" role="status">Подключаюсь…</div>
 <p class="hint"><b>Непрерывная сессия:</b> вкладка ленты остаётся на текущем месте. Deep-проход выполняется в отдельной служебной вкладке. После каждых N постов JSON сохраняется автоматически, и следующий пакет начинается прямо после предыдущей границы. Возврат к корню и поиск checkpoint используются только при старте или аварийной потере позиции.</p>
 <p class="hint">Сбор работает только с доступным в браузере Facebook. Полнота всех комментариев не гарантирована.</p>
-<script src="popup.js"></script></body></html>
+<script src="core.js"></script><script src="popup.js"></script></body></html>
